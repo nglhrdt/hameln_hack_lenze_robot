@@ -36,9 +36,16 @@ curl -X POST http://127.0.0.1:8000/command \
   --data '{"inputType":"text","data":"Please go home."}'
 ```
 
-Use `inputType: "instantCommand"` with `data` to send one of the commands
-directly, without AI interpretation. To execute a path, send an ordered,
-non-empty array of objects with `x` and `z` percentages:
+`inputType` may be `"text"` or `"instantCommand"` (an exact command such as
+`"move_left"`). Both accept an optional non-negative integer `stepSize`,
+which applies to movement commands; home and stop ignore it. For text commands,
+the model also extracts an explicitly stated movement distance, which takes
+precedence over `stepSize`. If no distance is stated, `stepSize` is the fallback.
+Ambiguous or invalid distances are rejected rather than used as continuous movement.
+Image, audio, and video inputs are not supported and are rejected.
+
+To execute a path, use `inputType: "point"` and send an ordered, non-empty
+array of objects with `x` and `z` percentages:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/command \
@@ -50,7 +57,6 @@ Each coordinate must be a normalized number from 0 to 1, with (0, 0) at the
 upper left. X maps linearly from 16.0 to 319.0, while Z maps from 155.0 at the
 top to -8.0 at the bottom. Point commands write the profile and start the robot's path;
 the number of points cannot exceed the device's profile buffer capacity.
-Image, audio, and video inputs are not supported and are rejected.
 
 ## Web Interface
 
@@ -73,7 +79,10 @@ changes the interface and does not stop movement or restrict commands from
 other clients.
 
 The text-command card sends its input to `/command` for AI interpretation;
-use the send button or Ctrl+Enter.
+use the send button or Ctrl+Enter. The optional Schrittweite field applies to
+both text and directional commands. Leave it empty for continuous movement
+unless the text specifies a distance; zero does not start a jog. Stop remains
+available even if the field is invalid.
 
 The Befehlsverlauf card shows the latest 100 commands dispatched through the
 API, newest first, including failed and in-progress attempts. It refreshes
@@ -155,7 +164,6 @@ least the given distance. The size must be a finite non-negative number; zero
 does not start a jog. Without `step_size`, the existing continuous movement
 behavior applies. Position is polled approximately every 0.1 seconds, so the
 robot can travel beyond the requested distance before the jog is stopped.
-The text-command API does not provide a step size.
 
 The OPC client also provides `await write_points(points)` for writing to the
 `g_ascProfilePar` array. The points are written in order to the first array
@@ -215,7 +223,7 @@ and enter commands such as `home`, `move_left`, or `stop`. Enter `quit` or
 EOF to exit and stop any active movement. This sends commands directly to the
 configured OPC UA device.
 
-Model interpretation can be incorrect even when the returned command is valid.
+Model interpretation can be incorrect even when the returned command and distance are valid.
 Use appropriate independent safety controls before connecting a physical device.
 Use an independent emergency stop; the `stop` command is not a substitute for
 a physical emergency stop.

@@ -60,7 +60,7 @@ class CommandTests(unittest.TestCase):
     def test_home_is_extracted_and_executed(self, mock_print, mock_openai, mock_home):
         client = mock_openai.return_value.__enter__.return_value
         client.chat.completions.create.return_value.choices = [
-            SimpleNamespace(message=SimpleNamespace(content="home"))
+            SimpleNamespace(message=SimpleNamespace(content='{"command":"home","stepSize":null}'))
         ]
         text = "Bitte fahre nach Hause."
         response = self.client.post("/command", json={"inputType": "text", "data": text})
@@ -93,13 +93,15 @@ class CommandTests(unittest.TestCase):
         for result in ("move_down", "stop"):
             with self.subTest(result=result):
                 client.chat.completions.create.return_value.choices = [
-                    SimpleNamespace(message=SimpleNamespace(content=result))
+                    SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                        "command": result, "stepSize": None,
+                    })))
                 ]
                 response = self.client.post(
                     "/command", json={"inputType": "text", "data": result}
                 )
                 self.assertEqual(response.status_code, 200)
-        mock_move.assert_awaited_once_with("move_down")
+        mock_move.assert_awaited_once_with("move_down", step_size=None)
         mock_stop.assert_awaited_once_with()
         self.assertIn("move_down", EXTRACTION_INSTRUCTIONS)
 
@@ -108,7 +110,10 @@ class CommandTests(unittest.TestCase):
     @patch("input_to_cmd.api.OpenAI")
     def test_ambiguous_and_invalid_commands_are_not_executed(self, mock_openai, mock_home):
         client = mock_openai.return_value.__enter__.return_value
-        for result, status in (("NONE", 422), ("move_right and move_left", 502)):
+        for result, status in (
+            ('{"command":null,"stepSize":null}', 422),
+            ('{"command":"move_right and move_left","stepSize":null}', 502),
+        ):
             with self.subTest(result=result):
                 client.chat.completions.create.return_value.choices = [
                     SimpleNamespace(message=SimpleNamespace(content=result))
@@ -125,7 +130,7 @@ class CommandTests(unittest.TestCase):
     def test_opc_failure_is_not_reported_as_success(self, mock_openai, mock_home):
         client = mock_openai.return_value.__enter__.return_value
         client.chat.completions.create.return_value.choices = [
-            SimpleNamespace(message=SimpleNamespace(content="home"))
+            SimpleNamespace(message=SimpleNamespace(content='{"command":"home","stepSize":null}'))
         ]
         mock_home.side_effect = ConnectionError("OPC failed")
         response = self.client.post("/command", json={"inputType": "text", "data": "Home"})
@@ -154,7 +159,7 @@ class CommandTests(unittest.TestCase):
     def test_debug_logging_reports_progress_without_raw_input(self, mock_openai, mock_home):
         client = mock_openai.return_value.__enter__.return_value
         client.chat.completions.create.return_value.choices = [
-            SimpleNamespace(message=SimpleNamespace(content="home"))
+            SimpleNamespace(message=SimpleNamespace(content='{"command":"home","stepSize":null}'))
         ]
         with self.assertLogs("input_to_cmd", level="DEBUG") as logs:
             response = self.client.post(
@@ -249,7 +254,7 @@ class CommandHistoryTests(unittest.TestCase):
         self.client = TestClient(app, raise_server_exceptions=False)
         self.addCleanup(self.client.close)
 
-    @patch("input_to_cmd.api.extract_command", return_value="home")
+    @patch("input_to_cmd.api.extract_command", return_value=("home", None))
     @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
     @patch("input_to_cmd.command_dispatcher.stop", new_callable=AsyncMock)
     @patch("input_to_cmd.command_dispatcher.write_xz_points", new_callable=AsyncMock)
@@ -396,6 +401,123 @@ class CommandHistoryConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await request).status_code, 200)
 
 
+class StepSizeCommandTests(unittest.TestCase):
+    def setUp(self) -> None:
+        settings = patch.multiple(
+            "input_to_cmd.api",
+            AI_API_URL="https://ki.mwl.merona.de/v1",
+            MODEL="smart-city-fast",
+        )
+        settings.start()
+        self.addCleanup(settings.stop)
+        self.client = TestClient(app, raise_server_exceptions=False)
+        self.addCleanup(self.client.close)
+
+
+    @patch.dict("os.environ", {"TEST_KEY": "test-key"})
+    @patch("input_to_cmd.command_dispatcher.move", new_callable=AsyncMock)
+    @patch("input_to_cmd.api.OpenAI")
+    def test_step_size_reaches_movement_for_both_input_types(self, mock_openai, mock_move):
+        client = mock_openai.return_value.__enter__.return_value
+        client.chat.completions.create.return_value.choices = [
+            SimpleNamespace(message=SimpleNamespace(content='{"command":"move_left","stepSize":null}'))
+        ]
+        for payload, step_size in (
+            ({"inputType": "instantCommand", "data": "move_right", "stepSize": 10}, 10),
+            ({"inputType": "text", "data": "left", "stepSize": 0}, 0),
+            ({"inputType": "instantCommand", "data": "move_up"}, None),
+            ({"inputType": "instantCommand", "data": "move_down", "stepSize": None}, None),
+        ):
+            with self.subTest(payload=payload):
+                mock_move.reset_mock()
+                response = self.client.post("/command", json=payload)
+                self.assertEqual(response.status_code, 200)
+                command = "move_left" if payload["inputType"] == "text" else payload["data"]
+                mock_move.assert_awaited_once_with(command, step_size=step_size)
+
+    @patch.dict("os.environ", {"TEST_KEY": "test-key"})
+    @patch("input_to_cmd.command_dispatcher.move", new_callable=AsyncMock)
+    @patch("input_to_cmd.api.OpenAI")
+    def test_text_distance_takes_precedence_and_missing_distance_uses_field(
+        self, mock_openai, mock_move
+    ):
+        model = mock_openai.return_value.__enter__.return_value
+        for text, extracted_size, field_size, expected_size in (
+            ("fahre 10 nach links", 10, 4, 10),
+            ("move left zero", 0, 4, 0),
+            ("fahre nach links", None, 4, 4),
+            ("move left", None, None, None),
+        ):
+            with self.subTest(text=text):
+                mock_move.reset_mock()
+                model.chat.completions.create.return_value.choices = [
+                    SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                        "command": "move_left", "stepSize": extracted_size,
+                    })))
+                ]
+                response = self.client.post("/command", json={
+                    "inputType": "text", "data": text, "stepSize": field_size,
+                })
+                self.assertEqual(response.status_code, 200)
+                mock_move.assert_awaited_once_with("move_left", step_size=expected_size)
+                self.assertEqual(
+                    model.chat.completions.create.call_args.kwargs["messages"][-1]["content"],
+                    text,
+                )
+
+    @patch.dict("os.environ", {"TEST_KEY": "test-key"})
+    @patch("input_to_cmd.command_dispatcher.move", new_callable=AsyncMock)
+    @patch("input_to_cmd.api.OpenAI")
+    def test_invalid_or_ambiguous_model_distance_never_starts_movement(
+        self, mock_openai, mock_move
+    ):
+        model = mock_openai.return_value.__enter__.return_value
+        for result, status in (
+            ('{"command":null,"stepSize":null}', 422),
+            ('{"command":"move_left","stepSize":-1}', 502),
+            ('{"command":"move_left","stepSize":1.5}', 502),
+            ('{"command":"move_left","stepSize":true}', 502),
+            ('{"command":"move_left","stepSize":"10"}', 502),
+            ('{"command":"move_left"}', 502),
+            ('{"command":"move_left","stepSize":null,"extra":1}', 502),
+            ("move_left", 502),
+            ("not json", 502),
+        ):
+            with self.subTest(result=result):
+                model.chat.completions.create.return_value.choices = [
+                    SimpleNamespace(message=SimpleNamespace(content=result))
+                ]
+                response = self.client.post("/command", json={
+                    "inputType": "text", "data": "move left by some distance", "stepSize": 5,
+                })
+                self.assertEqual(response.status_code, status)
+                mock_move.assert_not_awaited()
+
+    @patch("input_to_cmd.api.OpenAI")
+    @patch("input_to_cmd.command_dispatcher.move", new_callable=AsyncMock)
+    def test_invalid_step_sizes_are_rejected_before_processing(self, mock_move, mock_openai):
+        for step_size in (-1, 1.5, 1.0, "2", True, {}, []):
+            with self.subTest(step_size=step_size):
+                for input_type in ("text", "instantCommand"):
+                    response = self.client.post("/command", json={
+                        "inputType": input_type, "data": "move_left", "stepSize": step_size,
+                    })
+                    self.assertEqual(response.status_code, 422)
+        mock_openai.assert_not_called()
+        mock_move.assert_not_awaited()
+
+    @patch("input_to_cmd.command_dispatcher.stop", new_callable=AsyncMock)
+    @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
+    def test_step_size_does_not_change_home_or_stop(self, mock_home, mock_stop):
+        for command in ("home", "stop"):
+            response = self.client.post("/command", json={
+                "inputType": "instantCommand", "data": command, "stepSize": 10,
+            })
+            self.assertEqual(response.status_code, 200)
+        mock_home.assert_awaited_once_with()
+        mock_stop.assert_awaited_once_with()
+
+
 class DispatcherTests(unittest.IsolatedAsyncioTestCase):
     @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
     async def test_dispatcher_rejects_unknown_commands(self, mock_home):
@@ -412,6 +534,7 @@ class DispatcherTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call.args for call in move.await_args_list], [
             ("move_left",), ("move_right",), ("move_down",), ("move_up",),
         ])
+        self.assertTrue(all(call.kwargs == {"step_size": None} for call in move.await_args_list))
         stop.assert_awaited_once_with()
 
     @patch("input_to_cmd.command_dispatcher.get_running_movement", return_value=None)
@@ -1016,7 +1139,9 @@ class OpcClientTests(unittest.IsolatedAsyncioTestCase):
         client.get_node = MagicMock(side_effect=nodes.__getitem__)
         model = mock_openai.return_value.__enter__.return_value
         model.chat.completions.create.side_effect = [
-            SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=command))])
+            SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                "command": command, "stepSize": None,
+            })))])
             for command in ("move_left", "stop")
         ]
         try:
@@ -1103,7 +1228,7 @@ with patch.dict("os.environ", {"TEST_KEY": "test-key"}), \\
      patch("input_to_cmd.command_dispatcher.set_home") as home, \\
      patch("builtins.print"):
     ai.return_value.__enter__.return_value.chat.completions.create.return_value.choices = [
-        SimpleNamespace(message=SimpleNamespace(content="home"))
+        SimpleNamespace(message=SimpleNamespace(content='{"command":"home","stepSize":null}'))
     ]
     success = client.post("/command", headers={"Origin": "http://frontend.test:3000"},
                           json={"inputType": "text", "data": "Home"})

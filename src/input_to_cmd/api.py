@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
-from pydantic import BaseModel, Field, StrictStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from .command_dispatcher import UnsupportedCommandError, execute_command, get_running_command
@@ -87,10 +87,17 @@ STATUS_POLL_INTERVAL_SECONDS = 1.0
 POSITION_TIMEOUT_SECONDS = 2.0
 COMMANDS = {"home", "move_right", "move_up", "move_left", "move_down", "stop"}
 EXTRACTION_INSTRUCTIONS = (
-    "Extract exactly one command from the user's input. "
+    "Extract exactly one command and its optional movement distance from the user's input. "
     "The only valid commands are: home, move_right, move_up, move_left, move_down, stop. "
-    "Return only the exact command in lowercase, with no other text. "
-    "If the input does not clearly specify exactly one command, return NONE."
+    'Return only a JSON object with exactly two fields: "command" and "stepSize". '
+    '"command" must be an exact lowercase command or null. '
+    '"stepSize" must be a non-negative integer explicitly specified as the movement distance, '
+    "or null when no distance is specified. Do not treat unrelated numbers as distances, "
+    "invent a distance, or convert units. Understand both German and English. "
+    "If the command or an explicitly specified distance is ambiguous, negative, fractional, "
+    'or otherwise invalid, return {"command": null, "stepSize": null}. '
+    'Examples: "fahre 10 nach links" -> {"command": "move_left", "stepSize": 10}; '
+    '"move right" -> {"command": "move_right", "stepSize": null}.'
 )
 
 
@@ -106,6 +113,7 @@ class CommandInput(BaseModel):
     inputType: Literal["text", "instantCommand", "point"]
     data: StrictStr | None = None
     points: list[PointInput] | None = Field(default=None, min_length=1)
+    stepSize: int | None = Field(default=None, strict=True, ge=0)
 
     @model_validator(mode="after")
     def validate_input(self) -> "CommandInput":
@@ -115,6 +123,12 @@ class CommandInput(BaseModel):
         elif self.data is None:
             raise ValueError("Data is required for text and instant command input")
         return self
+
+
+class ExtractedCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    command: Literal["home", "move_right", "move_up", "move_left", "move_down", "stop"] | None
+    stepSize: int | None = Field(strict=True, ge=0)
 
 
 @app.get("/configuration")
@@ -144,7 +158,7 @@ def read_command_history() -> list[dict]:
         raise HTTPException(status_code=500, detail="Could not read command history.") from None
 
 
-def extract_command(content: CommandInput) -> str:
+def extract_command(content: CommandInput) -> tuple[str, int | None]:
     assert content.data is not None
     with OpenAI(
         base_url=AI_API_URL,
@@ -162,14 +176,15 @@ def extract_command(content: CommandInput) -> str:
     if not chat.choices or chat.choices[0].message.content is None:
         logger.error("Model returned no text response")
         raise RuntimeError("The model returned no text response.")
-    extracted = chat.choices[0].message.content.strip()
-    if extracted == "NONE":
-        logger.debug("Model found no unambiguous command")
-        raise HTTPException(status_code=422, detail="No unambiguous command found.")
-    if extracted not in COMMANDS:
-        logger.warning("Model returned an invalid command")
-        raise HTTPException(status_code=502, detail="The model returned an invalid command.")
-    return extracted
+    try:
+        extracted = ExtractedCommand.model_validate_json(chat.choices[0].message.content)
+    except ValidationError:
+        logger.warning("Model returned an invalid command or step size")
+        raise HTTPException(status_code=502, detail="The model returned an invalid command or step size.") from None
+    if extracted.command is None:
+        logger.debug("Model found no unambiguous command or step size")
+        raise HTTPException(status_code=422, detail="No unambiguous command or step size found.")
+    return extracted.command, extracted.stepSize
 
 
 @app.websocket("/ws/status")
@@ -214,6 +229,7 @@ async def status_socket(websocket: WebSocket) -> None:
 async def command(content: CommandInput) -> dict[str, str]:
     logger.debug("Received %s input", content.inputType)
 
+    step_size = content.stepSize
     points = None
     if content.inputType == "point":
         assert content.points is not None
@@ -233,14 +249,16 @@ async def command(content: CommandInput) -> dict[str, str]:
             raise HTTPException(status_code=422, detail=f"Invalid command. Valid commands are: {', '.join(COMMANDS)}")
     else:
         logger.debug("Requesting command extraction with model %s", MODEL)
-        extracted = await run_in_threadpool(extract_command, content)
-    
+        extracted, extracted_step_size = await run_in_threadpool(extract_command, content)
+        if extracted_step_size is not None:
+            step_size = extracted_step_size
+
     logger.debug("Extracted command: %s", extracted)
     print(extracted, flush=True)
     source = content.model_dump(mode="json", exclude_none=True)
     started_at = datetime.now(timezone.utc)
     task = asyncio.create_task(
-        execute_command(extracted) if points is None else execute_command(extracted, points)
+        execute_command(extracted, points=points, step_size=step_size)
     )
     event_id = None
     history_failed = False

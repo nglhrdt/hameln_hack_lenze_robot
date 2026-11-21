@@ -19,10 +19,12 @@ def get_running_command() -> str | None:
 
 
 async def execute_command(
-    command: str, points: Sequence[tuple[float, float]] | None = None
+    command: str,
+    points: Sequence[tuple[float, float]] | None = None,
+    step_size: int | None = None,
 ) -> None:
     if command in {"move_right", "move_up", "move_left", "move_down"}:
-        await move(command)
+        await move(command, step_size=step_size)
     elif command in {"home", "stop", "point"}:
         if command == "point" and not points:
             raise ValueError("At least one point is required")
