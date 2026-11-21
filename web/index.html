@@ -48,6 +48,15 @@
         [data-kasten-only][hidden] {
             display: none !important;
         }
+        #configuration-retry[hidden] {
+            display: none !important;
+        }
+        .settings-dialog {
+            width: min(90vw, 480px);
+            border: 0;
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+        }
         .image-marquee {
             position: fixed;
             bottom: 0;
@@ -77,7 +86,7 @@
         <div class="card-header bg-primary text-white d-flex flex-wrap justify-content-between align-items-center gap-2">
             <h5 class="card-title mb-0">Lenze Roboter Steuerung</h5>
             <label class="visually-hidden" for="device-type">Gerätetyp</label>
-            <select class="form-select form-select-sm w-auto" id="device-type">
+            <select class="form-select form-select-sm w-auto" id="device-type" disabled>
                 <option value="kasten">Kasten</option>
                 <option value="raeder">Räder</option>
             </select>
@@ -86,6 +95,8 @@
             <p class="card-text">
                 Willkommen zur Roboter-Steuerungsoberfläche. 
             </p>
+            <p class="small mb-1" id="configuration-status" role="status">Konfiguration wird geladen...</p>
+            <button type="button" class="btn btn-sm btn-outline-secondary mb-2" id="configuration-retry" hidden>Erneut laden</button>
             <p class="text-center mb-0" id="position">X: -- | Z: --</p>
             <p class="text-center text-muted small mb-2" id="status">Verbindung wird hergestellt...</p>
             <div class="d-flex justify-content-center">
@@ -127,7 +138,7 @@
         <div class="card-footer text-muted">
             <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
                 <small>Version 1.0 | Lenze AI Robot</small>
-                <button type="button" class="btn btn-primary btn-sm rounded-pill" data-command="home" data-kasten-only>
+                <button type="button" class="btn btn-primary btn-sm rounded-pill" data-command="home" data-kasten-only hidden>
                     <i class="bi bi-house" aria-hidden="true"></i> Home
                 </button>
             </div>
@@ -153,13 +164,26 @@
     </div>
 
     <div class="card">
-        <div class="card-header bg-primary text-white">
+        <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center gap-2">
             <h5 class="card-title mb-0">Geräteansicht</h5>
+            <button type="button" class="btn btn-light btn-sm" id="iframe-edit" disabled>URL ändern</button>
         </div>
         <div class="card-body">
-            <iframe class="device-view" src="http://192.168.5.203:5000" title="Geräteansicht"></iframe>
+            <iframe class="device-view" id="device-frame" title="Geräteansicht"></iframe>
         </div>
     </div>
+
+    <dialog class="settings-dialog" id="iframe-dialog" aria-labelledby="iframe-dialog-title">
+        <form id="iframe-form">
+            <h5 id="iframe-dialog-title">URL der Geräteansicht</h5>
+            <label class="form-label" for="iframe-url">URL (HTTP oder HTTPS)</label>
+            <input class="form-control mb-3" id="iframe-url" type="url" maxlength="2048" required>
+            <button type="submit" class="btn btn-primary">Speichern</button>
+            <button type="button" class="btn btn-secondary" id="iframe-cancel">Abbrechen</button>
+            <button type="button" class="btn btn-danger" data-command="stop">Stop</button>
+            <p class="small text-danger mt-2 mb-0" id="iframe-error" role="alert"></p>
+        </form>
+    </dialog>
 
     <div class="image-marquee" aria-hidden="true">
         <img src="./images/BlauerPacman.gif" alt="">
@@ -259,6 +283,19 @@
 
             const deviceType = document.getElementById("device-type");
             const hiddenCommand = document.getElementById("hidden-command");
+            const configurationStatus = document.getElementById("configuration-status");
+            const configurationRetry = document.getElementById("configuration-retry");
+            const iframeEdit = document.getElementById("iframe-edit");
+            const iframeDialog = document.getElementById("iframe-dialog");
+            const iframeForm = document.getElementById("iframe-form");
+            const iframeUrl = document.getElementById("iframe-url");
+            const iframeError = document.getElementById("iframe-error");
+            const iframeSave = iframeForm.querySelector('button[type="submit"]');
+            const iframeCancel = document.getElementById("iframe-cancel");
+            const deviceFrame = document.getElementById("device-frame");
+            let configurationLoaded = false;
+            let savedDeviceType;
+            let savedIframeUrl;
 
             function updateHiddenCommand() {
                 const activeButton = document.querySelector("[data-command].command-active");
@@ -269,12 +306,123 @@
 
             function updateDeviceType() {
                 document.querySelectorAll("[data-kasten-only]").forEach(element => {
-                    element.hidden = deviceType.value === "raeder";
+                    element.hidden = !configurationLoaded || deviceType.value === "raeder";
                 });
                 updateHiddenCommand();
             }
-            deviceType.addEventListener("change", updateDeviceType);
-            updateDeviceType();
+
+            async function saveConfiguration(changes) {
+                const response = await fetch("/configuration", {
+                    method: "PATCH",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify(changes),
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                return await response.json();
+            }
+
+            async function loadConfiguration() {
+                configurationLoaded = false;
+                deviceType.disabled = true;
+                iframeEdit.disabled = true;
+                configurationRetry.hidden = true;
+                configurationStatus.classList.remove("text-danger");
+                configurationStatus.textContent = "Konfiguration wird geladen...";
+                updateDeviceType();
+                try {
+                    const response = await fetch("/configuration");
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    const configuration = await response.json();
+                    const url = new URL(configuration.iframe_url);
+                    if (!["kasten", "raeder"].includes(configuration.device_type) ||
+                        !["http:", "https:"].includes(url.protocol) || url.username || url.password) {
+                        throw new Error("Ungültige Konfiguration");
+                    }
+                    savedDeviceType = configuration.device_type;
+                    savedIframeUrl = configuration.iframe_url;
+                    deviceType.value = savedDeviceType;
+                    deviceFrame.src = savedIframeUrl;
+                    configurationLoaded = true;
+                    deviceType.disabled = false;
+                    iframeEdit.disabled = false;
+                    configurationStatus.textContent = "";
+                    updateDeviceType();
+                } catch (error) {
+                    console.error("Could not load configuration", error);
+                    configurationStatus.classList.add("text-danger");
+                    configurationStatus.textContent = `Konfiguration konnte nicht geladen werden: ${error.message}`;
+                    configurationRetry.hidden = false;
+                }
+            }
+
+            configurationRetry.addEventListener("click", loadConfiguration);
+            deviceType.addEventListener("change", async function() {
+                const selected = deviceType.value;
+                deviceType.disabled = true;
+                configurationStatus.classList.remove("text-danger");
+                configurationStatus.textContent = "Gerätetyp wird gespeichert...";
+                updateDeviceType();
+                try {
+                    const configuration = await saveConfiguration({device_type: selected});
+                    savedDeviceType = configuration.device_type;
+                    deviceType.value = savedDeviceType;
+                    configurationStatus.textContent = "";
+                } catch (error) {
+                    console.error("Could not save device type", error);
+                    deviceType.value = savedDeviceType;
+                    configurationStatus.classList.add("text-danger");
+                    configurationStatus.textContent = `Gerätetyp konnte nicht gespeichert werden: ${error.message}`;
+                } finally {
+                    deviceType.disabled = false;
+                    updateDeviceType();
+                }
+            });
+
+            iframeEdit.addEventListener("click", function() {
+                iframeUrl.value = savedIframeUrl;
+                iframeError.textContent = "";
+                iframeDialog.showModal();
+            });
+            iframeCancel.addEventListener("click", () => iframeDialog.close());
+            iframeDialog.addEventListener("cancel", function(e) {
+                if (iframeSave.disabled) {
+                    e.preventDefault();
+                }
+            });
+            iframeForm.addEventListener("submit", async function(e) {
+                e.preventDefault();
+                if (iframeSave.disabled) {
+                    return;
+                }
+                const url = new URL(iframeUrl.value);
+                if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
+                    iframeError.textContent = "Bitte eine HTTP- oder HTTPS-URL ohne Zugangsdaten eingeben.";
+                    return;
+                }
+                iframeSave.disabled = true;
+                iframeCancel.disabled = true;
+                iframeUrl.disabled = true;
+                iframeError.textContent = "";
+                try {
+                    const configuration = await saveConfiguration({iframe_url: iframeUrl.value});
+                    savedIframeUrl = configuration.iframe_url;
+                    deviceFrame.src = savedIframeUrl;
+                    iframeDialog.close();
+                } catch (error) {
+                    console.error("Could not save iframe URL", error);
+                    iframeError.textContent = `URL konnte nicht gespeichert werden: ${error.message}`;
+                } finally {
+                    iframeSave.disabled = false;
+                    iframeCancel.disabled = false;
+                    iframeUrl.disabled = false;
+                }
+            });
+
+            loadConfiguration();
 
             document.querySelectorAll("[data-command]").forEach(button => {
                 button.addEventListener("click", function(e) {
@@ -300,7 +448,7 @@
             ]);
 
             document.addEventListener("keydown", function(e) {
-                if (e.ctrlKey || e.altKey || e.metaKey || e.isComposing ||
+                if (e.ctrlKey || e.altKey || e.metaKey || e.isComposing || iframeDialog.open ||
                     (e.target instanceof HTMLElement &&
                         (e.target.isContentEditable || e.target.closest("input, textarea, select")))) {
                     return;

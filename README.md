@@ -62,9 +62,22 @@ other clients.
 The text-command card sends its input to `/command` for AI interpretation;
 use the send button or Ctrl+Enter.
 
-The Geräteansicht card embeds `http://192.168.5.203:5000`. The browser must
-be able to reach that address, and the device must permit embedding. Browsers
-may block the HTTP frame if the control interface is served over HTTPS.
+The selected device type and Geräteansicht URL are shared settings. Change
+the URL using the card's dialog; only HTTP and HTTPS URLs without embedded
+credentials are accepted. Settings are loaded when the page opens, so other
+open pages need a reload to see changes. The default URL is
+`http://192.168.5.203:5000`. The browser must be able to reach the configured
+address, and the device must permit embedding. Browsers may block an HTTP
+frame if the control interface is served over HTTPS.
+
+Settings are stored in the TinyDB document database at `data/config.json`
+under the project root. Set `CONFIG_DB_PATH` to use another file; relative
+paths are resolved from the server's working directory. Keep this file and
+its backups protected: URLs may contain sensitive query parameters. The
+`GET /configuration` and `PATCH /configuration` endpoints read and update
+the shared settings. TinyDB access is synchronized within one process; run
+only one API worker, as also required for robot control. Configuration changes
+are not authenticated, so protect access to the API.
 
 The page connects to `/ws/status` on the same host. The server samples X and Z
 positions approximately once per second per connected client and sends JSON

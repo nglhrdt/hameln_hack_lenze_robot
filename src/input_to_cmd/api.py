@@ -15,6 +15,7 @@ from pydantic import BaseModel, StrictStr
 from starlette.concurrency import run_in_threadpool
 
 from .command_dispatcher import UnsupportedCommandError, execute_command, get_running_command
+from .config_store import Configuration, ConfigurationStore, ConfigurationUpdate
 from .opc_client import get_position, shutdown_connection
 
 load_dotenv(".env")
@@ -41,12 +42,15 @@ CORS_ALLOWED_ORIGINS = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ALLOWED_ORIGINS,
-    allow_methods=["POST", "OPTIONS"],
+    allow_methods=["GET", "PATCH", "POST", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
 
 web_dir = Path(__file__).resolve().parents[2] / "web"
 app.mount("/web", StaticFiles(directory=web_dir, html=True), name="web")
+configuration_store = ConfigurationStore(
+    Path(os.getenv("CONFIG_DB_PATH", str(web_dir.parent / "data" / "config.json")))
+)
 
 logger = logging.getLogger("input_to_cmd")
 logger.setLevel(LOG_LEVEL)
@@ -65,6 +69,24 @@ EXTRACTION_INSTRUCTIONS = (
 class CommandInput(BaseModel):
     inputType: Literal["text", "instantCommand"]
     data: StrictStr
+
+
+@app.get("/configuration")
+def read_configuration() -> Configuration:
+    try:
+        return configuration_store.read()
+    except (OSError, ValueError):
+        logger.exception("Could not read configuration")
+        raise HTTPException(status_code=500, detail="Could not read configuration.") from None
+
+
+@app.patch("/configuration")
+def update_configuration(changes: ConfigurationUpdate) -> Configuration:
+    try:
+        return configuration_store.update(changes)
+    except (OSError, ValueError):
+        logger.exception("Could not save configuration")
+        raise HTTPException(status_code=500, detail="Could not save configuration.") from None
 
 
 def extract_command(content: CommandInput) -> str:

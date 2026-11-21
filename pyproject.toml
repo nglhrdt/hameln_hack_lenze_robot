@@ -12,7 +12,9 @@ dependencies = [
     "asyncua",
     "fastapi",
     "openai",
+    "pydantic>=2,<3",
     "python-dotenv",
+    "tinydb>=4.8,<5",
     "uvicorn",
     "websockets>=10.4",
 ]
