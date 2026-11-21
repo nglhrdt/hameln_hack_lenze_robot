@@ -1,4 +1,4 @@
-.PHONY: all install run run-with-key test-dispatcher test-hurl
+.PHONY: all install run run-with-key test-dispatcher test-write-points test-hurl
 
 HURL_BASE_URL ?= http://127.0.0.1:8000
 
@@ -15,6 +15,9 @@ run-with-key: install
 
 test-dispatcher: install
 	python -m input_to_cmd.command_dispatcher
+
+test-write-points: install
+	python -m unittest input_to_cmd.opc_device_check
 
 test-hurl:
 	hurl --test --variable base_url=$(HURL_BASE_URL) tests/command.hurl

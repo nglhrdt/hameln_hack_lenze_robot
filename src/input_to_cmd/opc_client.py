@@ -1,11 +1,14 @@
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+import math
+import struct
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from operator import ge, le
 from typing import Callable
 
-from asyncua import Client
+from asyncua import Client, ua
 
 
 OPC_URL = "opc.tcp://192.168.5.99:4840"
@@ -18,12 +21,20 @@ X_JOG_NEG_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_xManJogXNeg"
 X_JOG_POS_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_xManJogXPos"
 Z_JOG_NEG_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_xManJogZNeg"
 Z_JOG_POS_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_xManJogZPos"
+PROFILE_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_ascPointBuffer"
+#PROFILE_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_ascProfilePar"
+PROFILE_DATA_TYPE_ID = "ns=4;s=|type|c500.Application.scProfilePar"
+PATH_EXECUTE_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_xPathExecute"
+X_MIN = 16.0
+X_MAX = 319.0
+Z_MIN = -8.0
+Z_MAX = 155.0
 MOVE_POLL_INTERVAL_SECONDS = 0.1
 MOVEMENT_COMMANDS: dict[str, tuple[str, str, float, Callable[[float, float], bool]]] = {
-    "move_left": (X_JOG_NEG_NODE_ID, X_POSITION_NODE_ID, 16.0, le),
-    "move_right": (X_JOG_POS_NODE_ID, X_POSITION_NODE_ID, 319.0, ge),
-    "move_down": (Z_JOG_NEG_NODE_ID, Z_POSITION_NODE_ID, -8.0, le),
-    "move_up": (Z_JOG_POS_NODE_ID, Z_POSITION_NODE_ID, 155.0, ge),
+    "move_left": (X_JOG_NEG_NODE_ID, X_POSITION_NODE_ID, X_MIN, le),
+    "move_right": (X_JOG_POS_NODE_ID, X_POSITION_NODE_ID, X_MAX, ge),
+    "move_down": (Z_JOG_NEG_NODE_ID, Z_POSITION_NODE_ID, Z_MIN, le),
+    "move_up": (Z_JOG_POS_NODE_ID, Z_POSITION_NODE_ID, Z_MAX, ge),
 }
 VELOCITY_TOLERANCE = 0.0001
 VELOCITY_POLL_INTERVAL_SECONDS = 0.1
@@ -38,6 +49,111 @@ _client_context: Client | None = None
 _client: Client | None = None
 _connection_lock: asyncio.Lock | None = None
 _connection_loop: asyncio.AbstractEventLoop | None = None
+
+
+@dataclass(frozen=True)
+class ProfilePoint:
+    x_pos: float
+    z_pos: float
+    path_vel: float
+    path_acc: float
+    path_dec: float
+    blending_radius: float
+    halt: bool
+
+
+DEFAULT_PATH_VEL = 350.0
+DEFAULT_PATH_ACC = 1000.0
+DEFAULT_PATH_DEC = 1000.0
+DEFAULT_BLENDING_RADIUS = 0.0
+
+
+async def write_xz_points(points: Sequence[tuple[float, float]]) -> None:
+    """Write (x, z) points using the default motion parameters."""
+    await write_points([
+        ProfilePoint(
+            x, z, DEFAULT_PATH_VEL, DEFAULT_PATH_ACC, DEFAULT_PATH_DEC,
+            DEFAULT_BLENDING_RADIUS, False,
+        )
+        for x, z in points
+    ])
+
+
+async def write_points(points: Sequence[ProfilePoint]) -> None:
+    """Write points to the start of the profile array, then execute the path.
+
+    Only the supplied elements are written (OPC UA index range); the rest of
+    the array is not sent.
+    """
+    bodies = []
+    for point in points:
+        values = (
+            point.x_pos,
+            point.z_pos,
+            point.path_vel,
+            point.path_acc,
+            point.path_dec,
+            point.blending_radius,
+        )
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            for value in values
+        ):
+            raise ValueError("Profile point numeric fields must be finite numbers")
+        if not isinstance(point.halt, bool):
+            raise ValueError("Profile point halt must be a boolean")
+        bodies.append(struct.pack("<6d?", *values, point.halt))
+    if not bodies:
+        raise ValueError("At least one profile point is required")
+    for index, point in enumerate(points):
+        if not (X_MIN <= point.x_pos <= X_MAX) or not (Z_MIN <= point.z_pos <= Z_MAX):
+            raise ValueError(
+                f"Profile point {index} ({point.x_pos}, {point.z_pos}) is outside "
+                f"limits X {X_MIN}..{X_MAX}, Z {Z_MIN}..{Z_MAX}"
+            )
+
+    async with connection() as client:
+        node = client.get_node(PROFILE_NODE_ID)
+        data_type_id = await node.read_data_type()
+        if data_type_id != ua.NodeId.from_string(PROFILE_DATA_TYPE_ID):
+            raise ValueError(f"Unexpected profile data type: {data_type_id}")
+        current = await node.read_value()
+        if not isinstance(current, (list, tuple)):
+            raise ValueError("Profile node does not contain a one-dimensional array")
+        if len(bodies) > len(current):
+            raise ValueError(
+                f"Expected at most {len(current)} profile points, received {len(bodies)}"
+            )
+
+        data_type = client.get_node(data_type_id)
+        encodings = await data_type.get_references(
+            refs=ua.ObjectIds.HasEncoding,
+            direction=ua.BrowseDirection.Forward,
+            nodeclassmask=ua.NodeClass.Object,
+        )
+        binary_encodings = [
+            ref.NodeId
+            for ref in encodings
+            if ref.BrowseName == ua.QualifiedName("Default Binary")
+        ]
+        if len(binary_encodings) != 1:
+            raise ValueError("Profile data type must have one Default Binary encoding")
+        encoding = binary_encodings[0]
+        if isinstance(encoding, ua.ExpandedNodeId) and (
+            encoding.NamespaceUri or encoding.ServerIndex
+        ):
+            raise ValueError("Remote profile binary encodings are not supported")
+        encoding_id = ua.NodeId(encoding.Identifier, encoding.NamespaceIndex, encoding.NodeIdType)
+        value = [ua.ExtensionObject(TypeId=encoding_id, Body=body) for body in bodies]
+        index_range = "0" if len(value) == 1 else f"0:{len(value) - 1}"
+        await node.write_attribute(
+            ua.AttributeIds.Value,
+            ua.DataValue(ua.Variant(value, ua.VariantType.ExtensionObject)),
+            index_range,
+        )
+    await _execute_until_stopped(PATH_EXECUTE_NODE_ID, "path")
 
 
 def create_client() -> Client:
@@ -234,14 +350,18 @@ async def stop() -> None:
 
 
 async def set_home() -> None:
-    logger.info("Starting home command on OPC UA node %s", HOME_NODE_ID)
+    await _execute_until_stopped(HOME_NODE_ID, "home")
+
+
+async def _execute_until_stopped(node_id: str, name: str) -> None:
+    logger.info("Starting %s command on OPC UA node %s", name, node_id)
     try:
         async with connection() as client:
-            node = client.get_node(HOME_NODE_ID)
+            node = client.get_node(node_id)
             x_velocity_node = client.get_node(X_VELOCITY_NODE_ID)
             z_velocity_node = client.get_node(Z_VELOCITY_NODE_ID)
             await node.write_value(True)
-            logger.info("Set home execute node to true")
+            logger.info("Set %s execute node to true", name)
             stable_readings = 0
             while True:
                 x_velocity = await x_velocity_node.read_value()
@@ -257,14 +377,14 @@ async def set_home() -> None:
                     stable_readings = 0
                 await asyncio.sleep(VELOCITY_POLL_INTERVAL_SECONDS)
     except Exception:
-        logger.exception("Failed to execute the home command")
+        logger.exception("Failed to execute the %s command", name)
         raise
     finally:
         try:
             async with connection() as client:
-                node = client.get_node(HOME_NODE_ID)
+                node = client.get_node(node_id)
                 await node.write_value(False)
-                logger.info("Set home execute node to false")
+                logger.info("Set %s execute node to false", name)
         except Exception:
-            logger.exception("Failed to reset the home execute node to false")
+            logger.exception("Failed to reset the %s execute node to false", name)
             raise

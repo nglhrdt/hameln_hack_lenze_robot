@@ -110,12 +110,53 @@ node, waits for three consecutive low-velocity readings, and resets the node.
 Each movement command starts its manual jog node and returns while the client
 polls the corresponding position. Movement continues until `stop`, another
 movement command, shutdown, an error, or its configured limit (X: 16.0 to
-319.0; Z: -11.0 to 155.0). A new movement command stops the previous movement
+319.0; Z: -8.0 to 155.0). A new movement command stops the previous movement
 first. The `stop` command clears all four manual jog nodes. Run only one API
 process controlling the device so all commands share the same movement monitor.
 Position polling, movement, home, and stop share one lazily opened OPC UA
 connection per process. Shutdown stops active movement before closing that
 connection; use a single server worker to avoid opening additional sessions.
+
+The OPC client also provides `await write_points(points)` for writing to the
+`g_ascProfilePar` array. The points are written in order to the first array
+elements using an OPC UA index range (for example `0:5`); the remaining
+elements are not sent, so the device keeps whatever it already holds there.
+The device must support index-range writes on this array; otherwise the write
+fails and the path is not executed. More points than the array holds raise
+`ValueError`.
+X and Z of every supplied point must be within `X_MIN`..`X_MAX` and
+`Z_MIN`..`Z_MAX` (the same limits as manual movement):
+
+```python
+from input_to_cmd.opc_client import ProfilePoint, write_points
+
+points = [
+    ProfilePoint(
+        x_pos=50, z_pos=30, path_vel=350, path_acc=1000, path_dec=1000,
+        blending_radius=0, halt=False,
+    ),
+]
+await write_points(points)
+```
+
+`await write_xz_points([(50, 30), (110, 140)])` takes only X/Z coordinates and
+uses `DEFAULT_PATH_VEL`, `DEFAULT_PATH_ACC`, `DEFAULT_PATH_DEC`,
+`DEFAULT_BLENDING_RADIUS`, and `halt=False`.
+
+The wire layout follows `scProfilePar`: six LREAL fields in the order shown
+above, followed by a BOOL. The server must expose the expected data type and
+its Default Binary encoding. After a successful write, the method sets
+`g_xPathExecute` to true, which starts the path motion. Like home, it waits
+for three consecutive low-velocity readings and then resets the node to
+false, also on errors. If the write fails, the path is not executed. The
+example is illustrative, not a safety recommendation.
+
+To test against the real device, run `make test-write-points`. This manually
+invoked test is not included in the regular test suite because it needs a real
+device connection. It prints the current profile, asks for confirmation, writes
+the test points from `TEST_PROFILE_POINTS`, executes the path (the robot
+moves), and prints the profile read back from the device.
+
 HTTP 200 returns `{"result":"command exectued"}` after movement starts (or
 immediately if its limit has already been reached); monitoring failures after
 the response are logged. Other commands return after execution finishes; low velocity
