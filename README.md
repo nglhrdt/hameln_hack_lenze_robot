@@ -10,14 +10,25 @@ Install the project in editable mode:
 make install
 ```
 
-Start the API (you will be prompted for the key without displaying it):
+Copy `.env.example` to `.env` if needed and configure the settings. Add
+`TEST_KEY` to `.env` or set it in the environment. The `.env` file is ignored
+by Git; keep your key private. The application reads `.env` from the current
+working directory, and existing environment variables take precedence.
+
+Start the API:
+
+```bash
+make run
+```
+
+Alternatively, start it with a prompt for the key without displaying it:
 
 ```bash
 make run-with-key
 ```
 
-Alternatively, set `TEST_KEY` in the environment and run `make run`. The API
-listens on `127.0.0.1:8000`. Send a JSON object containing a plain-text command:
+By default, the API listens on `0.0.0.0:8000` (all network interfaces). Send a JSON object
+containing a plain-text command:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/command \
@@ -28,12 +39,20 @@ curl -X POST http://127.0.0.1:8000/command \
 Currently only `inputType: "text"` is supported. Image, audio, and video
 inputs are not yet supported and are rejected.
 
+The `HOST`, `PORT`, `MODEL`, `AI_API_URL`, and `COMMAND_API_URL` settings
+control the listening address, model, and API endpoints. `COMMAND_API_URL` must
+be an HTTP URL without credentials.
+
+Set `LOG_LEVEL=DEBUG` in `.env` to log command-processing steps and the
+execution server's response status. Connection failures are logged with their
+underlying error. Logs do not include the API key or raw input text.
+
 The model extracts one of `home`, `move right`, `move up`, or `move left`.
 The command is printed and sent as JSON to
-`http://192.168.5.203:8000/command`. A successful response from that server
-returns HTTP 200 with `{"result":"command exectued"}`; this confirms acceptance,
-not physical completion. Input the model identifies as ambiguous and invalid model responses
-are not forwarded.
+`http://192.168.5.202:8000/command` by default. A successful response from
+that server returns HTTP 200 with `{"result":"command exectued"}`; this confirms
+acceptance, not physical completion. Input the model identifies as ambiguous
+and invalid model responses are not forwarded.
 If the request to the command server times out or the connection fails, its
 execution status may be unknown; check the device before retrying.
 

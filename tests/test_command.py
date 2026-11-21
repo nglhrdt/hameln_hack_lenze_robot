@@ -1,4 +1,10 @@
+import json
+import os
+import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -9,6 +15,14 @@ from input_to_cmd.__main__ import EXTRACTION_INSTRUCTIONS, app
 
 class CommandTests(unittest.TestCase):
     def setUp(self) -> None:
+        settings = patch.multiple(
+            "input_to_cmd.__main__",
+            AI_API_URL="https://ki.mwl.merona.de/v1",
+            MODEL="smart-city-fast",
+            COMMAND_API_URL="http://192.168.5.202:8000/command",
+        )
+        settings.start()
+        self.addCleanup(settings.stop)
         self.client = TestClient(app, raise_server_exceptions=False)
         self.addCleanup(self.client.close)
 
@@ -44,7 +58,7 @@ class CommandTests(unittest.TestCase):
                     ],
                     max_tokens=1024,
                 )
-                mock_connection.assert_called_once_with("192.168.5.203", 8000, timeout=10)
+                mock_connection.assert_called_once_with("192.168.5.202", 8000, timeout=10)
                 connection.request.assert_called_once_with(
                     "POST",
                     "/command",
@@ -56,6 +70,40 @@ class CommandTests(unittest.TestCase):
                 mock_openai.reset_mock()
                 mock_connection.reset_mock()
                 mock_print.reset_mock()
+
+    @patch.dict("os.environ", {"TEST_KEY": "test-key"})
+    @patch("input_to_cmd.__main__.COMMAND_API_URL", "http://example.test:9000/run?source=api")
+    @patch("input_to_cmd.__main__.OpenAI")
+    @patch("input_to_cmd.__main__.http.client.HTTPConnection")
+    def test_command_api_url_controls_destination_and_path(self, mock_connection, mock_openai):
+        client = mock_openai.return_value.__enter__.return_value
+        client.chat.completions.create.return_value.choices = [
+            SimpleNamespace(message=SimpleNamespace(content="home"))
+        ]
+        mock_connection.return_value.getresponse.return_value.status = 200
+
+        response = self.client.post("/command", json={"inputType": "text", "data": "Go home"})
+
+        self.assertEqual(response.status_code, 200)
+        mock_connection.assert_called_once_with("example.test", 9000, timeout=10)
+        self.assertEqual(
+            mock_connection.return_value.request.call_args.args[:2], ("POST", "/run?source=api")
+        )
+
+    @patch.dict("os.environ", {"TEST_KEY": "test-key"})
+    @patch("input_to_cmd.__main__.COMMAND_API_URL", "https://example.test/command")
+    @patch("input_to_cmd.__main__.OpenAI")
+    @patch("input_to_cmd.__main__.http.client.HTTPConnection")
+    def test_https_command_url_is_not_sent_over_http(self, mock_connection, mock_openai):
+        client = mock_openai.return_value.__enter__.return_value
+        client.chat.completions.create.return_value.choices = [
+            SimpleNamespace(message=SimpleNamespace(content="home"))
+        ]
+
+        response = self.client.post("/command", json={"inputType": "text", "data": "Go home"})
+
+        self.assertEqual(response.status_code, 500)
+        mock_connection.assert_not_called()
 
     @patch.dict("os.environ", {"TEST_KEY": "test-key"})
     @patch("input_to_cmd.__main__.OpenAI")
@@ -142,6 +190,40 @@ class CommandTests(unittest.TestCase):
         messages = client.chat.completions.create.call_args.kwargs["messages"]
         self.assertEqual(messages[1], {"role": "user", "content": text})
 
+    @patch.dict("os.environ", {"TEST_KEY": "test-key"})
+    @patch("input_to_cmd.__main__.OpenAI")
+    @patch("input_to_cmd.__main__.http.client.HTTPConnection")
+    def test_debug_logging_reports_progress_without_raw_input(self, mock_connection, mock_openai):
+        client = mock_openai.return_value.__enter__.return_value
+        client.chat.completions.create.return_value.choices = [
+            SimpleNamespace(message=SimpleNamespace(content="home"))
+        ]
+        mock_connection.return_value.getresponse.return_value.status = 200
+        with self.assertLogs("input_to_cmd", level="DEBUG") as logs:
+            response = self.client.post(
+                "/command", json={"inputType": "text", "data": "private request"}
+            )
+        self.assertEqual(response.status_code, 200)
+        output = "\n".join(logs.output)
+        self.assertIn("Extracted command: home", output)
+        self.assertIn("Command server responded with HTTP 200", output)
+        self.assertNotIn("private request", output)
+        self.assertNotIn("test-key", output)
+
+    @patch.dict("os.environ", {"TEST_KEY": "test-key"})
+    @patch("input_to_cmd.__main__.OpenAI")
+    @patch("input_to_cmd.__main__.http.client.HTTPConnection")
+    def test_connection_error_is_logged(self, mock_connection, mock_openai):
+        client = mock_openai.return_value.__enter__.return_value
+        client.chat.completions.create.return_value.choices = [
+            SimpleNamespace(message=SimpleNamespace(content="home"))
+        ]
+        mock_connection.return_value.request.side_effect = ConnectionRefusedError("refused")
+        with self.assertLogs("input_to_cmd", level="ERROR") as logs:
+            response = self.client.post("/command", json={"inputType": "text", "data": "Home"})
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("ConnectionRefusedError", logs.output[0])
+
     @patch("input_to_cmd.__main__.OpenAI")
     @patch("input_to_cmd.__main__.http.client.HTTPConnection")
     def test_invalid_inputs_are_rejected_without_processing(self, mock_connection, mock_openai):
@@ -164,6 +246,64 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         mock_openai.assert_not_called()
         mock_connection.assert_not_called()
+
+
+class ConfigurationTests(unittest.TestCase):
+    def test_log_level_controls_debug_output(self):
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+        env["TEST_KEY"] = "test-key"
+        script = (
+            "from unittest.mock import patch; import input_to_cmd.__main__ as config; "
+            "patcher = patch.object(config.uvicorn, 'run'); patcher.start(); "
+            "config.main(); config.logger.debug('debug message'); patcher.stop()"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for level in ("INFO", "DEBUG"):
+                with self.subTest(level=level):
+                    env["LOG_LEVEL"] = level
+                    result = subprocess.run(
+                        [sys.executable, "-c", script], cwd=directory, env=env,
+                        check=True, capture_output=True, text=True,
+                    )
+                    self.assertEqual("debug message" in result.stderr, level == "DEBUG")
+
+    def test_dotenv_settings_and_environment_precedence(self):
+        names = ("HOST", "PORT", "MODEL", "AI_API_URL", "COMMAND_API_URL", "TEST_KEY")
+        file_values = ("127.0.0.2", "9001", "file-model", "https://ai.test/v1",
+                       "http://command.test:9002/run", "file-key")
+        env = os.environ.copy()
+        for name in names:
+            env.pop(name, None)
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+        script = (
+            "import json, os; import input_to_cmd.__main__ as config; "
+            "print(json.dumps([config.HOST, config.PORT, config.MODEL, "
+            "config.AI_API_URL, config.COMMAND_API_URL, os.environ['TEST_KEY']]))"
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, ".env").write_text(
+                "".join(f"{name}={value}\n" for name, value in zip(names, file_values)),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [sys.executable, "-c", script], cwd=directory, env=env,
+                check=True, capture_output=True, text=True,
+            )
+            self.assertEqual(json.loads(result.stdout), [
+                "127.0.0.2", 9001, "file-model", "https://ai.test/v1",
+                "http://command.test:9002/run", "file-key",
+            ])
+
+            env["MODEL"] = "environment-model"
+            env["TEST_KEY"] = "environment-key"
+            result = subprocess.run(
+                [sys.executable, "-c", script], cwd=directory, env=env,
+                check=True, capture_output=True, text=True,
+            )
+            self.assertEqual(json.loads(result.stdout)[2], "environment-model")
+            self.assertEqual(json.loads(result.stdout)[5], "environment-key")
 
 
 if __name__ == "__main__":
