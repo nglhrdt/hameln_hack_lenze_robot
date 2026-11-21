@@ -1,6 +1,6 @@
-import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
@@ -10,12 +10,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from pydantic import BaseModel, StrictStr
+from starlette.concurrency import run_in_threadpool
 
 from .command_dispatcher import UnsupportedCommandError, execute_command
+from .opc_client import shutdown_movement
 
 load_dotenv(".env")
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        yield
+    finally:
+        await shutdown_movement()
+
+
+app = FastAPI(lifespan=lifespan)
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
@@ -53,10 +63,7 @@ class CommandInput(BaseModel):
     data: StrictStr
 
 
-@app.post("/command")
-def command(content: CommandInput) -> dict[str, str]:
-    logger.debug("Received %s input (%d characters)", content.inputType, len(content.data))
-    logger.debug("Requesting command extraction with model %s", MODEL)
+def extract_command(content: CommandInput) -> str:
     with OpenAI(
         base_url=AI_API_URL,
         api_key=os.environ["TEST_KEY"],
@@ -80,11 +87,19 @@ def command(content: CommandInput) -> dict[str, str]:
     if extracted not in COMMANDS:
         logger.warning("Model returned an invalid command")
         raise HTTPException(status_code=502, detail="The model returned an invalid command.")
+    return extracted
+
+
+@app.post("/command")
+async def command(content: CommandInput) -> dict[str, str]:
+    logger.debug("Received %s input (%d characters)", content.inputType, len(content.data))
+    logger.debug("Requesting command extraction with model %s", MODEL)
+    extracted = await run_in_threadpool(extract_command, content)
 
     logger.debug("Extracted command: %s", extracted)
     print(extracted, flush=True)
     try:
-        asyncio.run(execute_command(extracted))
+        await execute_command(extracted)
     except UnsupportedCommandError as exc:
         logger.warning("Unsupported command: %s", extracted)
         raise HTTPException(status_code=501, detail=str(exc)) from exc

@@ -16,7 +16,6 @@ X_JOG_NEG_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_xManJogXNeg"
 X_JOG_POS_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_xManJogXPos"
 Z_JOG_NEG_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_xManJogZNeg"
 Z_JOG_POS_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_xManJogZPos"
-MOVE_DURATION_SECONDS = 5
 MOVE_POLL_INTERVAL_SECONDS = 0.1
 MOVEMENT_COMMANDS: dict[str, tuple[str, str, float, Callable[[float, float], bool]]] = {
     "move_left": (X_JOG_NEG_NODE_ID, X_POSITION_NODE_ID, 16.0, le),
@@ -29,6 +28,9 @@ VELOCITY_POLL_INTERVAL_SECONDS = 0.1
 VELOCITY_STABLE_READINGS = 3
 SESSION_TIMEOUT_MS = 900_000
 logger = logging.getLogger(__name__)
+_movement_task: asyncio.Task[None] | None = None
+_movement_lock: asyncio.Lock | None = None
+_movement_loop: asyncio.AbstractEventLoop | None = None
 
 
 def create_client() -> Client:
@@ -41,56 +43,117 @@ async def move(command: str) -> None:
     if command not in MOVEMENT_COMMANDS:
         raise ValueError(f"Unknown movement command: {command}")
 
+    global _movement_task
+    async with _get_movement_lock():
+        await _cancel_movement()
+        started = asyncio.get_running_loop().create_future()
+        task = asyncio.create_task(_run_movement(command, started))
+        task.add_done_callback(_report_movement_failure)
+        _movement_task = task
+        try:
+            await started
+        except BaseException:
+            if not task.done():
+                task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                _movement_task = None
+            raise
+
+
+def _get_movement_lock() -> asyncio.Lock:
+    global _movement_lock, _movement_loop
+    loop = asyncio.get_running_loop()
+    if _movement_loop is not loop:
+        if _movement_task is not None and not _movement_task.done():
+            raise RuntimeError("Movement is active on another event loop")
+        _movement_lock = asyncio.Lock()
+        _movement_loop = loop
+    assert _movement_lock is not None
+    return _movement_lock
+
+
+def _report_movement_failure(task: asyncio.Task[None]) -> None:
+    if not task.cancelled():
+        error = task.exception()
+        if error is not None:
+            logger.error("Movement task failed", exc_info=(type(error), error, error.__traceback__))
+
+
+async def _cancel_movement() -> None:
+    global _movement_task
+    task = _movement_task
+    _movement_task = None
+    if task is not None:
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+async def shutdown_movement() -> None:
+    async with _get_movement_lock():
+        await _cancel_movement()
+
+
+async def _run_movement(command: str, started: asyncio.Future[None]) -> None:
     jog_node_id, position_node_id, limit, reached_limit = MOVEMENT_COMMANDS[command]
     logger.info("Starting movement command %s on OPC UA node %s", command, jog_node_id)
-    async with create_client() as client:
-        jog_node = client.get_node(jog_node_id)
-        position_node = client.get_node(position_node_id)
-        try:
-            position = await position_node.read_value()
-            if reached_limit(position, limit):
-                logger.info("%s limit already reached at position %s", command, position)
-            else:
-                await jog_node.write_value(True)
-                logger.info("Set movement node to true")
-                loop = asyncio.get_running_loop()
-                deadline = loop.time() + MOVE_DURATION_SECONDS
-                while True:
-                    position = await position_node.read_value()
-                    if reached_limit(position, limit):
-                        logger.info("%s limit reached at position %s", command, position)
-                        break
-                    remaining = deadline - loop.time()
-                    if remaining <= 0:
-                        break
-                    await asyncio.sleep(min(MOVE_POLL_INTERVAL_SECONDS, remaining))
-        except Exception:
-            logger.exception("Failed to execute movement command %s", command)
-            raise
-        finally:
+    try:
+        async with create_client() as client:
+            jog_node = client.get_node(jog_node_id)
+            position_node = client.get_node(position_node_id)
             try:
+                position = await position_node.read_value()
+                if reached_limit(position, limit):
+                    logger.info("%s limit already reached at position %s", command, position)
+                else:
+                    await jog_node.write_value(True)
+                    started.set_result(None)
+                    logger.info("Set movement node to true")
+                    while True:
+                        position = await position_node.read_value()
+                        if reached_limit(position, limit):
+                            logger.info("%s limit reached at position %s", command, position)
+                            break
+                        await asyncio.sleep(MOVE_POLL_INTERVAL_SECONDS)
+            finally:
                 await jog_node.write_value(False)
                 logger.info("Set movement node to false")
-            except Exception:
-                logger.exception("Failed to reset movement node to false")
-                raise
+    except Exception as exc:
+        if not started.done():
+            started.set_exception(exc)
+        raise
+    else:
+        if not started.done():
+            started.set_result(None)
 
 
 async def stop() -> None:
     logger.info("Stopping manual movement on OPC UA")
-    async with create_client() as client:
+    async with _get_movement_lock():
         failures = []
-        for node_id in (
-            X_JOG_NEG_NODE_ID,
-            X_JOG_POS_NODE_ID,
-            Z_JOG_NEG_NODE_ID,
-            Z_JOG_POS_NODE_ID,
-        ):
-            try:
-                await client.get_node(node_id).write_value(False)
-            except Exception as exc:
-                logger.exception("Failed to clear manual movement node %s", node_id)
-                failures.append(exc)
+        try:
+            await _cancel_movement()
+        except Exception as exc:
+            failures.append(exc)
+        async with create_client() as client:
+            for node_id in (
+                X_JOG_NEG_NODE_ID,
+                X_JOG_POS_NODE_ID,
+                Z_JOG_NEG_NODE_ID,
+                Z_JOG_POS_NODE_ID,
+            ):
+                try:
+                    await client.get_node(node_id).write_value(False)
+                except Exception as exc:
+                    logger.exception("Failed to clear manual movement node %s", node_id)
+                    failures.append(exc)
         if failures:
             raise failures[0]
 

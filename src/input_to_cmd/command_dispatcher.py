@@ -1,6 +1,6 @@
 import asyncio
 
-from .opc_client import move, set_home, stop
+from .opc_client import move, set_home, shutdown_movement, stop
 
 
 class UnsupportedCommandError(ValueError):
@@ -19,8 +19,17 @@ async def execute_command(command: str) -> None:
 
 
 async def main() -> None:
-    command = input("Enter command: ").strip()
-    await execute_command(command)
+    try:
+        while True:
+            try:
+                command = (await asyncio.to_thread(input, "Enter command (or quit): ")).strip()
+            except EOFError:
+                break
+            if command == "quit":
+                break
+            await execute_command(command)
+    finally:
+        await shutdown_movement()
 
 
 if __name__ == "__main__":
