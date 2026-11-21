@@ -6,11 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
 from input_to_cmd.__main__ import EXTRACTION_INSTRUCTIONS, app
+from input_to_cmd.command_dispatcher import UnsupportedCommandError, execute_command
+from input_to_cmd import opc_client
 
 
 class CommandTests(unittest.TestCase):
@@ -19,7 +21,6 @@ class CommandTests(unittest.TestCase):
             "input_to_cmd.__main__",
             AI_API_URL="https://ki.mwl.merona.de/v1",
             MODEL="smart-city-fast",
-            COMMAND_API_URL="http://192.168.5.202:8000/command",
         )
         settings.start()
         self.addCleanup(settings.stop)
@@ -27,139 +28,75 @@ class CommandTests(unittest.TestCase):
         self.addCleanup(self.client.close)
 
     @patch.dict("os.environ", {"TEST_KEY": "test-key"})
+    @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
     @patch("input_to_cmd.__main__.OpenAI")
-    @patch("input_to_cmd.__main__.http.client.HTTPConnection")
     @patch("builtins.print")
-    def test_forwards_each_valid_command(self, mock_print, mock_connection, mock_openai):
-        client = mock_openai.return_value.__enter__.return_value
-        connection = mock_connection.return_value
-        connection.getresponse.return_value.status = 200
-
-        for extracted in ("home", "move right", "move up", "move left", "stop"):
-            with self.subTest(command=extracted):
-                text = "Stop the robot" if extracted == "stop" else "My request"
-                client.chat.completions.create.return_value.choices = [
-                    SimpleNamespace(message=SimpleNamespace(content=extracted))
-                ]
-                response = self.client.post(
-                    "/command", json={"inputType": "text", "data": text}
-                )
-
-                self.assertEqual(response.status_code, 200)
-                self.assertEqual(response.json(), {"result": "command exectued"})
-                self.assertEqual(response.headers["content-type"], "application/json")
-                mock_openai.assert_called_once_with(
-                    base_url="https://ki.mwl.merona.de/v1", api_key="test-key"
-                )
-                client.chat.completions.create.assert_called_once_with(
-                    model="smart-city-fast",
-                    messages=[
-                        {"role": "system", "content": EXTRACTION_INSTRUCTIONS},
-                        {"role": "user", "content": text},
-                    ],
-                    max_tokens=1024,
-                )
-                if extracted == "stop":
-                    self.assertIn("stop", EXTRACTION_INSTRUCTIONS)
-                mock_connection.assert_called_once_with("192.168.5.202", 8000, timeout=10)
-                connection.request.assert_called_once_with(
-                    "POST",
-                    "/command",
-                    body=f'{{"command": "{extracted}"}}'.encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                )
-                connection.close.assert_called_once()
-                mock_print.assert_called_once_with(extracted, flush=True)
-                mock_openai.reset_mock()
-                mock_connection.reset_mock()
-                mock_print.reset_mock()
-
-    @patch.dict("os.environ", {"TEST_KEY": "test-key"})
-    @patch("input_to_cmd.__main__.COMMAND_API_URL", "http://example.test:9000/run?source=api")
-    @patch("input_to_cmd.__main__.OpenAI")
-    @patch("input_to_cmd.__main__.http.client.HTTPConnection")
-    def test_command_api_url_controls_destination_and_path(self, mock_connection, mock_openai):
+    def test_home_is_extracted_and_executed(self, mock_print, mock_openai, mock_home):
         client = mock_openai.return_value.__enter__.return_value
         client.chat.completions.create.return_value.choices = [
             SimpleNamespace(message=SimpleNamespace(content="home"))
         ]
-        mock_connection.return_value.getresponse.return_value.status = 200
-
-        response = self.client.post("/command", json={"inputType": "text", "data": "Go home"})
+        text = "Bitte fahre nach Hause."
+        response = self.client.post("/command", json={"inputType": "text", "data": text})
 
         self.assertEqual(response.status_code, 200)
-        mock_connection.assert_called_once_with("example.test", 9000, timeout=10)
-        self.assertEqual(
-            mock_connection.return_value.request.call_args.args[:2], ("POST", "/run?source=api")
+        self.assertEqual(response.json(), {"result": "command exectued"})
+        self.assertEqual(response.headers["content-type"], "application/json")
+        mock_openai.assert_called_once_with(
+            base_url="https://ki.mwl.merona.de/v1", api_key="test-key"
         )
+        client.chat.completions.create.assert_called_once_with(
+            model="smart-city-fast",
+            messages=[
+                {"role": "system", "content": EXTRACTION_INSTRUCTIONS},
+                {"role": "user", "content": text},
+            ],
+            max_tokens=1024,
+        )
+        mock_home.assert_awaited_once_with()
+        mock_print.assert_called_once_with("home", flush=True)
 
     @patch.dict("os.environ", {"TEST_KEY": "test-key"})
-    @patch("input_to_cmd.__main__.COMMAND_API_URL", "https://example.test/command")
+    @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
     @patch("input_to_cmd.__main__.OpenAI")
-    @patch("input_to_cmd.__main__.http.client.HTTPConnection")
-    def test_https_command_url_is_not_sent_over_http(self, mock_connection, mock_openai):
+    def test_unsupported_ambiguous_and_invalid_commands_are_not_executed(
+        self, mock_openai, mock_home
+    ):
         client = mock_openai.return_value.__enter__.return_value
-        client.chat.completions.create.return_value.choices = [
-            SimpleNamespace(message=SimpleNamespace(content="home"))
-        ]
-
-        response = self.client.post("/command", json={"inputType": "text", "data": "Go home"})
-
-        self.assertEqual(response.status_code, 500)
-        mock_connection.assert_not_called()
-
-    @patch.dict("os.environ", {"TEST_KEY": "test-key"})
-    @patch("input_to_cmd.__main__.OpenAI")
-    @patch("input_to_cmd.__main__.http.client.HTTPConnection")
-    def test_invalid_or_ambiguous_output_is_not_forwarded(self, mock_connection, mock_openai):
-        client = mock_openai.return_value.__enter__.return_value
-        for result, status in (("NONE", 422), ("move right and move left", 502)):
+        for result, status in (
+            ("move right", 501), ("move up", 501), ("move left", 501), ("stop", 501),
+            ("NONE", 422), ("move right and move left", 502),
+        ):
             with self.subTest(result=result):
                 client.chat.completions.create.return_value.choices = [
                     SimpleNamespace(message=SimpleNamespace(content=result))
                 ]
-                response = self.client.post(
-                    "/command", json={"inputType": "text", "data": "My request"}
-                )
+                text = "Stop the robot" if result == "stop" else "My request"
+                response = self.client.post("/command", json={"inputType": "text", "data": text})
                 self.assertEqual(response.status_code, status)
-                mock_connection.assert_not_called()
+                if result == "stop":
+                    self.assertIn("stop", EXTRACTION_INSTRUCTIONS)
+                mock_home.assert_not_awaited()
 
     @patch.dict("os.environ", {"TEST_KEY": "test-key"})
+    @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
     @patch("input_to_cmd.__main__.OpenAI")
-    @patch("input_to_cmd.__main__.http.client.HTTPConnection")
-    def test_command_server_failure_is_not_reported_as_success(self, mock_connection, mock_openai):
+    def test_opc_failure_is_not_reported_as_success(self, mock_openai, mock_home):
         client = mock_openai.return_value.__enter__.return_value
         client.chat.completions.create.return_value.choices = [
             SimpleNamespace(message=SimpleNamespace(content="home"))
         ]
-        connection = mock_connection.return_value
-        connection.getresponse.return_value.status = 500
-
-        response = self.client.post(
-            "/command", json={"inputType": "text", "data": "Go home"}
-        )
-        self.assertEqual(response.status_code, 502)
-        connection.close.assert_called_once()
-
-        connection.reset_mock()
-        connection.request.side_effect = TimeoutError("timed out")
-        response = self.client.post(
-            "/command", json={"inputType": "text", "data": "Go home"}
-        )
-        self.assertEqual(response.status_code, 502)
-        self.assertIn("Could not confirm", response.json()["detail"])
-        connection.close.assert_called_once()
+        mock_home.side_effect = ConnectionError("OPC failed")
+        response = self.client.post("/command", json={"inputType": "text", "data": "Home"})
+        self.assertEqual(response.status_code, 500)
+        mock_home.assert_awaited_once()
 
     @patch.dict("os.environ", {"TEST_KEY": "test-key"})
     @patch("input_to_cmd.__main__.OpenAI")
     def test_model_failure_returns_server_error(self, mock_openai):
         client = mock_openai.return_value.__enter__.return_value
         client.chat.completions.create.side_effect = RuntimeError("API failed")
-
-        response = self.client.post(
-            "/command", json={"inputType": "text", "data": "Move forward"}
-        )
-
+        response = self.client.post("/command", json={"inputType": "text", "data": "Home"})
         self.assertEqual(response.status_code, 500)
 
     @patch.dict("os.environ", {"TEST_KEY": "test-key"})
@@ -167,41 +104,17 @@ class CommandTests(unittest.TestCase):
     def test_empty_model_response_returns_server_error(self, mock_openai):
         client = mock_openai.return_value.__enter__.return_value
         client.chat.completions.create.return_value.choices = []
-
-        response = self.client.post(
-            "/command", json={"inputType": "text", "data": "Move forward"}
-        )
-
+        response = self.client.post("/command", json={"inputType": "text", "data": "Home"})
         self.assertEqual(response.status_code, 500)
 
     @patch.dict("os.environ", {"TEST_KEY": "test-key"})
+    @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
     @patch("input_to_cmd.__main__.OpenAI")
-    @patch("input_to_cmd.__main__.http.client.HTTPConnection")
-    def test_text_data_is_sent_to_model_unchanged(self, mock_connection, mock_openai):
-        client = mock_openai.return_value.__enter__.return_value
-        client.chat.completions.create.return_value.choices = [
-            SimpleNamespace(message=SimpleNamespace(content="move right"))
-        ]
-        mock_connection.return_value.getresponse.return_value.status = 200
-        text = "Bewege den Roboter fünf Zentimeter nach rechts."
-
-        response = self.client.post("/command", json={"inputType": "text", "data": text})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"result": "command exectued"})
-        self.assertEqual(response.headers["content-type"], "application/json")
-        messages = client.chat.completions.create.call_args.kwargs["messages"]
-        self.assertEqual(messages[1], {"role": "user", "content": text})
-
-    @patch.dict("os.environ", {"TEST_KEY": "test-key"})
-    @patch("input_to_cmd.__main__.OpenAI")
-    @patch("input_to_cmd.__main__.http.client.HTTPConnection")
-    def test_debug_logging_reports_progress_without_raw_input(self, mock_connection, mock_openai):
+    def test_debug_logging_reports_progress_without_raw_input(self, mock_openai, mock_home):
         client = mock_openai.return_value.__enter__.return_value
         client.chat.completions.create.return_value.choices = [
             SimpleNamespace(message=SimpleNamespace(content="home"))
         ]
-        mock_connection.return_value.getresponse.return_value.status = 200
         with self.assertLogs("input_to_cmd", level="DEBUG") as logs:
             response = self.client.post(
                 "/command", json={"inputType": "text", "data": "private request"}
@@ -209,27 +122,13 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         output = "\n".join(logs.output)
         self.assertIn("Extracted command: home", output)
-        self.assertIn("Command server responded with HTTP 200", output)
+        self.assertIn("Command execution finished: home", output)
         self.assertNotIn("private request", output)
         self.assertNotIn("test-key", output)
 
-    @patch.dict("os.environ", {"TEST_KEY": "test-key"})
     @patch("input_to_cmd.__main__.OpenAI")
-    @patch("input_to_cmd.__main__.http.client.HTTPConnection")
-    def test_connection_error_is_logged(self, mock_connection, mock_openai):
-        client = mock_openai.return_value.__enter__.return_value
-        client.chat.completions.create.return_value.choices = [
-            SimpleNamespace(message=SimpleNamespace(content="home"))
-        ]
-        mock_connection.return_value.request.side_effect = ConnectionRefusedError("refused")
-        with self.assertLogs("input_to_cmd", level="ERROR") as logs:
-            response = self.client.post("/command", json={"inputType": "text", "data": "Home"})
-        self.assertEqual(response.status_code, 502)
-        self.assertIn("ConnectionRefusedError", logs.output[0])
-
-    @patch("input_to_cmd.__main__.OpenAI")
-    @patch("input_to_cmd.__main__.http.client.HTTPConnection")
-    def test_invalid_inputs_are_rejected_without_processing(self, mock_connection, mock_openai):
+    @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
+    def test_invalid_inputs_are_rejected_without_processing(self, mock_home, mock_openai):
         for payload in (
             {"inputType": "image", "data": "image data"},
             {"inputType": "audio", "data": "audio data"},
@@ -242,13 +141,57 @@ class CommandTests(unittest.TestCase):
             with self.subTest(payload=payload):
                 response = self.client.post("/command", json=payload)
                 self.assertEqual(response.status_code, 422)
-
         response = self.client.post(
             "/command", content="Move right", headers={"Content-Type": "text/plain"}
         )
         self.assertEqual(response.status_code, 422)
         mock_openai.assert_not_called()
-        mock_connection.assert_not_called()
+        mock_home.assert_not_awaited()
+
+
+class DispatcherTests(unittest.IsolatedAsyncioTestCase):
+    @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
+    async def test_dispatcher_rejects_unknown_commands(self, mock_home):
+        with self.assertRaises(UnsupportedCommandError):
+            await execute_command("unknown")
+        mock_home.assert_not_awaited()
+
+
+class OpcClientTests(unittest.IsolatedAsyncioTestCase):
+    @patch("input_to_cmd.opc_client.asyncio.sleep", new_callable=AsyncMock)
+    @patch("input_to_cmd.opc_client.create_client")
+    async def test_home_waits_for_stable_velocities_and_resets(self, create_client, sleep):
+        home, x, z = MagicMock(), MagicMock(), MagicMock()
+        home.write_value = AsyncMock()
+        x.read_value = AsyncMock(side_effect=[0, 1, 0, 0, 0])
+        z.read_value = AsyncMock(return_value=0)
+        client = create_client.return_value.__aenter__.return_value
+        client.get_node = MagicMock(side_effect=lambda node: {
+            opc_client.HOME_NODE_ID: home,
+            opc_client.X_VELOCITY_NODE_ID: x,
+            opc_client.Z_VELOCITY_NODE_ID: z,
+        }[node])
+        await opc_client.set_home()
+        self.assertEqual(home.write_value.await_args_list[0].args, (True,))
+        self.assertEqual(home.write_value.await_args_list[1].args, (False,))
+        self.assertEqual(x.read_value.await_count, 5)
+        self.assertEqual(sleep.await_count, 4)
+
+    @patch("input_to_cmd.opc_client.create_client")
+    async def test_home_resets_after_read_failure(self, create_client):
+        home, x, z = MagicMock(), MagicMock(), MagicMock()
+        home.write_value = AsyncMock()
+        x.read_value = AsyncMock(side_effect=RuntimeError("read failed"))
+        client = create_client.return_value.__aenter__.return_value
+        client.get_node = MagicMock(side_effect=lambda node: {
+            opc_client.HOME_NODE_ID: home,
+            opc_client.X_VELOCITY_NODE_ID: x,
+            opc_client.Z_VELOCITY_NODE_ID: z,
+        }[node])
+        with self.assertLogs("input_to_cmd.opc_client", level="ERROR"):
+            with self.assertRaisesRegex(RuntimeError, "read failed"):
+                await opc_client.set_home()
+        self.assertEqual([call.args for call in home.write_value.await_args_list], [(True,), (False,)])
 
 
 class ConfigurationTests(unittest.TestCase):
@@ -275,14 +218,13 @@ denied_header = client.options("/command", headers=headers)
 post = client.post("/command", headers={"Origin": "http://frontend.test:3000"}, json={})
 with patch.dict("os.environ", {"TEST_KEY": "test-key"}), \\
      patch("input_to_cmd.__main__.OpenAI") as ai, \\
-     patch("input_to_cmd.__main__.http.client.HTTPConnection") as connection, \\
+     patch("input_to_cmd.command_dispatcher.set_home") as home, \\
      patch("builtins.print"):
     ai.return_value.__enter__.return_value.chat.completions.create.return_value.choices = [
-        SimpleNamespace(message=SimpleNamespace(content="stop"))
+        SimpleNamespace(message=SimpleNamespace(content="home"))
     ]
-    connection.return_value.getresponse.return_value.status = 200
     success = client.post("/command", headers={"Origin": "http://frontend.test:3000"},
-                          json={"inputType": "text", "data": "Stop"})
+                          json={"inputType": "text", "data": "Home"})
 print(json.dumps([allowed.status_code, allowed.headers.get("access-control-allow-origin"),
                   allowed.headers.get("access-control-allow-methods"),
                   denied.status_code, denied.headers.get("access-control-allow-origin"),
@@ -337,9 +279,8 @@ print(json.dumps([allowed.status_code, allowed.headers.get("access-control-allow
                     self.assertEqual("debug message" in result.stderr, level == "DEBUG")
 
     def test_dotenv_settings_and_environment_precedence(self):
-        names = ("HOST", "PORT", "MODEL", "AI_API_URL", "COMMAND_API_URL", "TEST_KEY")
-        file_values = ("127.0.0.2", "9001", "file-model", "https://ai.test/v1",
-                       "http://command.test:9002/run", "file-key")
+        names = ("HOST", "PORT", "MODEL", "AI_API_URL", "TEST_KEY")
+        file_values = ("127.0.0.2", "9001", "file-model", "https://ai.test/v1", "file-key")
         env = os.environ.copy()
         for name in names:
             env.pop(name, None)
@@ -347,9 +288,8 @@ print(json.dumps([allowed.status_code, allowed.headers.get("access-control-allow
         script = (
             "import json, os; import input_to_cmd.__main__ as config; "
             "print(json.dumps([config.HOST, config.PORT, config.MODEL, "
-            "config.AI_API_URL, config.COMMAND_API_URL, os.environ['TEST_KEY']]))"
+            "config.AI_API_URL, os.environ['TEST_KEY']]))"
         )
-
         with tempfile.TemporaryDirectory() as directory:
             Path(directory, ".env").write_text(
                 "".join(f"{name}={value}\n" for name, value in zip(names, file_values)),
@@ -360,10 +300,8 @@ print(json.dumps([allowed.status_code, allowed.headers.get("access-control-allow
                 check=True, capture_output=True, text=True,
             )
             self.assertEqual(json.loads(result.stdout), [
-                "127.0.0.2", 9001, "file-model", "https://ai.test/v1",
-                "http://command.test:9002/run", "file-key",
+                "127.0.0.2", 9001, "file-model", "https://ai.test/v1", "file-key",
             ])
-
             env["MODEL"] = "environment-model"
             env["TEST_KEY"] = "environment-key"
             result = subprocess.run(
@@ -371,7 +309,7 @@ print(json.dumps([allowed.status_code, allowed.headers.get("access-control-allow
                 check=True, capture_output=True, text=True,
             )
             self.assertEqual(json.loads(result.stdout)[2], "environment-model")
-            self.assertEqual(json.loads(result.stdout)[5], "environment-key")
+            self.assertEqual(json.loads(result.stdout)[4], "environment-key")
 
 
 if __name__ == "__main__":

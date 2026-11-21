@@ -9,6 +9,7 @@ description = "A Python project for input_to_cmd."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "asyncua",
     "fastapi",
     "openai",
     "python-dotenv",

@@ -33,7 +33,7 @@ containing a plain-text command:
 ```bash
 curl -X POST http://127.0.0.1:8000/command \
   -H 'Content-Type: application/json' \
-  --data '{"inputType":"text","data":"Bewege den Roboter 15 Zentimeter nach rechts."}'
+  --data '{"inputType":"text","data":"Please go home."}'
 ```
 
 Currently only `inputType: "text"` is supported. Image, audio, and video
@@ -46,27 +46,25 @@ origins (including scheme and port), then restart the API. Allowing all origins
 lets any website send commands from a browser that can reach the API. CORS is
 not authentication; protect access to the API separately.
 
-The `HOST`, `PORT`, `MODEL`, `AI_API_URL`, and `COMMAND_API_URL` settings
-control the listening address, model, and API endpoints. `COMMAND_API_URL` must
-be an HTTP URL without credentials.
+The `HOST`, `PORT`, `MODEL`, and `AI_API_URL` settings control the listening
+address, model, and AI endpoint.
 
-Set `LOG_LEVEL=DEBUG` in `.env` to log command-processing steps and the
-execution server's response status. Connection failures are logged with their
-underlying error. Logs do not include the API key or raw input text.
+Set `LOG_LEVEL=DEBUG` in `.env` to log command-processing steps. Logs do not
+include the API key or raw input text.
 
 The model extracts one of `home`, `move right`, `move up`, `move left`, or `stop`.
-The command is printed and sent as JSON to
-`http://192.168.5.202:8000/command` by default. A successful response from
-that server returns HTTP 200 with `{"result":"command exectued"}`; this confirms
-acceptance, not physical completion. Input the model identifies as ambiguous
-and invalid model responses are not forwarded.
-If the request to the command server times out or the connection fails, its
-execution status may be unknown; check the device before retrying.
+Only `home` is currently supported for execution. It is printed and dispatched
+directly to the OPC UA client at `opc.tcp://192.168.5.99:4840`. The client
+sets the home node, waits for three consecutive low-velocity readings, and
+resets the node. HTTP 200 returns `{"result":"command exectued"}` after this
+process finishes; low velocity alone does not confirm physical homing.
+Movement commands and `stop` return HTTP 501 and are not executed. Ambiguous input and invalid model responses
+are not executed. If execution fails, check the device before retrying.
 
 Model interpretation can be incorrect even when the returned command is valid.
 Use appropriate independent safety controls before connecting a physical device.
-The `stop` command depends on the model, network, and command server; it is not
-a substitute for an independent emergency stop.
+**The `stop` command is not implemented and will not stop the robot.** Use an
+independent emergency stop.
 
 ## Hurl test
 
@@ -77,8 +75,8 @@ described above. In another terminal, run:
 make test-hurl
 ```
 
-The test sends a real request to the model and can move the device connected to
-the command server. To test a different API address, set `HURL_BASE_URL`, for
+The test sends a real request to the model and can home the connected device.
+To test a different API address, set `HURL_BASE_URL`, for
 example `make test-hurl HURL_BASE_URL=http://127.0.0.1:8001`.
 
 The package source is in `src/input_to_cmd`.

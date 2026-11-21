@@ -1,9 +1,7 @@
-import http.client
-import json
+import asyncio
 import logging
 import os
 from typing import Literal
-from urllib.parse import urlsplit
 
 import uvicorn
 from dotenv import load_dotenv
@@ -11,6 +9,8 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 from pydantic import BaseModel, StrictStr
+
+from .command_dispatcher import UnsupportedCommandError, execute_command
 
 load_dotenv(".env")
 
@@ -20,7 +20,6 @@ HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
 MODEL = os.getenv("MODEL", "smart-city-fast")
 AI_API_URL = os.getenv("AI_API_URL", "https://ki.mwl.merona.de/v1")
-COMMAND_API_URL = os.getenv("COMMAND_API_URL", "http://192.168.5.202:8000/command")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 CORS_ALLOWED_ORIGINS = [
     origin.strip() for origin in os.getenv("CORS_ALLOWED_ORIGINS", "*").split(",") if origin.strip()
@@ -79,37 +78,13 @@ def command(content: CommandInput) -> dict[str, str]:
 
     logger.debug("Extracted command: %s", extracted)
     print(extracted, flush=True)
-    command_url = urlsplit(COMMAND_API_URL)
-    if command_url.scheme != "http" or not command_url.hostname or command_url.username is not None:
-        raise ValueError("COMMAND_API_URL must be an HTTP URL without credentials.")
-    path = command_url.path or "/"
-    if command_url.query:
-        path += f"?{command_url.query}"
-    logger.debug("Sending command to %s:%s", command_url.hostname, command_url.port or 80)
-    connection = http.client.HTTPConnection(command_url.hostname, command_url.port, timeout=10)
     try:
-        connection.request(
-            "POST",
-            path,
-            body=json.dumps({"command": extracted}).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
-        response = connection.getresponse()
-        logger.debug("Command server responded with HTTP %s", response.status)
-        if not 200 <= response.status < 300:
-            logger.warning("Command server returned HTTP %s", response.status)
-            raise HTTPException(
-                status_code=502,
-                detail=f"Command server returned HTTP {response.status}.",
-            )
-    except (OSError, http.client.HTTPException) as exc:
-        logger.error("Command server request failed (%s): %s", type(exc).__name__, exc)
-        raise HTTPException(
-            status_code=502,
-            detail="Could not confirm whether the command server accepted the request.",
-        ) from exc
-    finally:
-        connection.close()
+        asyncio.run(execute_command(extracted))
+    except UnsupportedCommandError as exc:
+        logger.warning("Unsupported command: %s", extracted)
+        raise HTTPException(status_code=501, detail=str(exc)) from exc
+
+    logger.debug("Command execution finished: %s", extracted)
 
     return {"result": "command exectued"}
 
