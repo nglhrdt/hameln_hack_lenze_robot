@@ -5,7 +5,7 @@
     const defaults = {
         robotName: "Lenze / Roboter 01",
         endpoint: "",
-        apiUrl: "http://192.168.5.204:8000/command",
+        apiUrl: `${location.protocol}//${location.host}/command`,
         forwardApi: true,
         directionStep: 5,
         language: "de-DE",
