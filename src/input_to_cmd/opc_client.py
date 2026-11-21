@@ -227,15 +227,23 @@ async def get_position() -> tuple[float, float]:
     return x_position, z_position
 
 
-async def move(command: str) -> None:
+async def move(command: str, step_size: float | None = None) -> None:
+    """Start a jog, optionally stopping after the axis travels step_size."""
     if command not in MOVEMENT_COMMANDS:
         raise ValueError(f"Unknown movement command: {command}")
+    if step_size is not None and (
+        isinstance(step_size, bool)
+        or not isinstance(step_size, (int, float))
+        or (isinstance(step_size, float) and not math.isfinite(step_size))
+        or step_size < 0
+    ):
+        raise ValueError("step_size must be a finite non-negative number")
 
     global _movement_command, _movement_task
     async with _get_movement_lock():
         await _cancel_movement()
         started = asyncio.get_running_loop().create_future()
-        task = asyncio.create_task(_run_movement(command, started))
+        task = asyncio.create_task(_run_movement(command, started, step_size))
         task.add_done_callback(_report_movement_failure)
         _movement_task = task
         _movement_command = command
@@ -292,7 +300,9 @@ async def shutdown_movement() -> None:
         await _cancel_movement()
 
 
-async def _run_movement(command: str, started: asyncio.Future[None]) -> None:
+async def _run_movement(
+    command: str, started: asyncio.Future[None], step_size: float | None = None
+) -> None:
     jog_node_id, position_node_id, limit, reached_limit = MOVEMENT_COMMANDS[command]
     logger.info("Starting movement command %s on OPC UA node %s", command, jog_node_id)
     try:
@@ -303,7 +313,10 @@ async def _run_movement(command: str, started: asyncio.Future[None]) -> None:
                 position = await position_node.read_value()
                 if reached_limit(position, limit):
                     logger.info("%s limit already reached at position %s", command, position)
+                elif step_size == 0:
+                    logger.info("%s step size is zero; not starting movement", command)
                 else:
+                    start_position = position
                     await jog_node.write_value(True)
                     started.set_result(None)
                     logger.info("Set movement node to true")
@@ -311,6 +324,9 @@ async def _run_movement(command: str, started: asyncio.Future[None]) -> None:
                         position = await position_node.read_value()
                         if reached_limit(position, limit):
                             logger.info("%s limit reached at position %s", command, position)
+                            break
+                        if step_size is not None and abs(position - start_position) >= step_size:
+                            logger.info("%s step size reached at position %s", command, position)
                             break
                         await asyncio.sleep(MOVE_POLL_INTERVAL_SECONDS)
             finally:

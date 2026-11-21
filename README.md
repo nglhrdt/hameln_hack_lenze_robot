@@ -117,6 +117,14 @@ Position polling, movement, home, and stop share one lazily opened OPC UA
 connection per process. Shutdown stops active movement before closing that
 connection; use a single server worker to avoid opening additional sessions.
 
+For direct Python use, `await move("move_left", step_size=10.0)` optionally
+stops the jog when the axis position differs from its starting position by at
+least the given distance. The size must be a finite non-negative number; zero
+does not start a jog. Without `step_size`, the existing continuous movement
+behavior applies. Position is polled approximately every 0.1 seconds, so the
+robot can travel beyond the requested distance before the jog is stopped.
+The text-command API does not provide a step size.
+
 The OPC client also provides `await write_points(points)` for writing to the
 `g_ascProfilePar` array. The points are written in order to the first array
 elements using an OPC UA index range (for example `0:5`); the remaining
@@ -156,6 +164,13 @@ invoked test is not included in the regular test suite because it needs a real
 device connection. It prints the current profile, asks for confirmation, writes
 the test points from `TEST_PROFILE_POINTS`, executes the path (the robot
 moves), and prints the profile read back from the device.
+
+`make test-step-size` runs a separate real-device check. After confirmation,
+it jogs right by a requested distance of 10.0, waits up to 30 seconds for the
+movement monitor, and prints and checks the X displacement. Ensure there is
+enough clear space for the movement and possible overshoot. The check stops
+the jog on timeout and closes the connection; it is not an emergency stop.
+Run it only when no other process is controlling the device.
 
 HTTP 200 returns `{"result":"command exectued"}` after movement starts (or
 immediately if its limit has already been reached); monitoring failures after

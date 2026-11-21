@@ -1,4 +1,4 @@
-.PHONY: all install run run-with-key test-dispatcher test-write-points test-hurl
+.PHONY: all install run run-with-key test-dispatcher test-write-points test-step-size test-hurl
 
 HURL_BASE_URL ?= http://127.0.0.1:8000
 
@@ -17,7 +17,10 @@ test-dispatcher: install
 	python -m input_to_cmd.command_dispatcher
 
 test-write-points: install
-	python -m unittest input_to_cmd.opc_device_check
+	python -m unittest input_to_cmd.opc_device_check.OpcDeviceProfileTest
+
+test-step-size: install
+	python -m unittest input_to_cmd.opc_device_check.OpcDeviceStepTest
 
 test-hurl:
 	hurl --test --variable base_url=$(HURL_BASE_URL) tests/command.hurl

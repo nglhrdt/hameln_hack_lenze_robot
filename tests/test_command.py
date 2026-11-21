@@ -463,6 +463,106 @@ class OpcClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(position.read_value.await_count, 2)
         sleep.assert_not_awaited()
 
+    @patch("input_to_cmd.opc_client.asyncio.sleep", new_callable=AsyncMock)
+    @patch("input_to_cmd.opc_client.create_client")
+    async def test_move_stops_at_step_size_in_each_direction(self, create_client, sleep):
+        client = create_client.return_value.__aenter__.return_value
+        cases = (
+            ("move_left", opc_client.X_JOG_NEG_NODE_ID, opc_client.X_POSITION_NODE_ID, 50.0, 49.0, 48.0),
+            ("move_right", opc_client.X_JOG_POS_NODE_ID, opc_client.X_POSITION_NODE_ID, 50.0, 51.0, 52.0),
+            ("move_down", opc_client.Z_JOG_NEG_NODE_ID, opc_client.Z_POSITION_NODE_ID, 50.0, 49.0, 47.0),
+            ("move_up", opc_client.Z_JOG_POS_NODE_ID, opc_client.Z_POSITION_NODE_ID, 50.0, 51.0, 53.0),
+        )
+        for command, jog_id, position_id, start, intermediate, end in cases:
+            with self.subTest(command=command):
+                jog, position = MagicMock(), MagicMock()
+                jog.write_value = AsyncMock()
+                position.read_value = AsyncMock(side_effect=[start, intermediate, end])
+                client.get_node = MagicMock(side_effect={jog_id: jog, position_id: position}.__getitem__)
+                sleep.reset_mock()
+                await opc_client.move(command, step_size=2.0)
+                await opc_client._movement_task
+                self.assertEqual([call.args for call in jog.write_value.await_args_list], [
+                    (True,), (False,),
+                ])
+                self.assertEqual(position.read_value.await_count, 3)
+                sleep.assert_awaited_once_with(opc_client.MOVE_POLL_INTERVAL_SECONDS)
+
+    @patch("input_to_cmd.opc_client.create_client")
+    async def test_move_zero_step_does_not_start_jog(self, create_client):
+        jog, position = MagicMock(), MagicMock()
+        jog.write_value = AsyncMock()
+        position.read_value = AsyncMock(return_value=50.0)
+        client = create_client.return_value.__aenter__.return_value
+        client.get_node = MagicMock(side_effect={
+            opc_client.X_JOG_NEG_NODE_ID: jog,
+            opc_client.X_POSITION_NODE_ID: position,
+        }.__getitem__)
+        await opc_client.move("move_left", step_size=0)
+        jog.write_value.assert_awaited_once_with(False)
+        position.read_value.assert_awaited_once_with()
+
+    @patch("input_to_cmd.opc_client.create_client")
+    async def test_move_rejects_invalid_step_sizes_before_stopping_active_move(self, create_client):
+        jog, position = MagicMock(), MagicMock()
+        jog.write_value = AsyncMock()
+        position.read_value = AsyncMock(return_value=50.0)
+        client = create_client.return_value.__aenter__.return_value
+        client.get_node = MagicMock(side_effect={
+            opc_client.X_JOG_NEG_NODE_ID: jog,
+            opc_client.X_POSITION_NODE_ID: position,
+        }.__getitem__)
+        await opc_client.move("move_left")
+        for step_size in (-1, float("nan"), float("inf"), True, "2"):
+            with self.subTest(step_size=step_size):
+                with self.assertRaisesRegex(ValueError, "step_size"):
+                    await opc_client.move("move_left", step_size=step_size)
+                self.assertEqual(opc_client.get_running_command(), "move_left")
+        jog.write_value.assert_awaited_once_with(True)
+
+    @patch("input_to_cmd.opc_client.create_client")
+    async def test_move_with_step_size_still_stops_at_axis_limit(self, create_client):
+        jog, position = MagicMock(), MagicMock()
+        jog.write_value = AsyncMock()
+        position.read_value = AsyncMock(side_effect=[20.0, 16.0])
+        client = create_client.return_value.__aenter__.return_value
+        client.get_node = MagicMock(side_effect={
+            opc_client.X_JOG_NEG_NODE_ID: jog,
+            opc_client.X_POSITION_NODE_ID: position,
+        }.__getitem__)
+        await opc_client.move("move_left", step_size=10.0)
+        await opc_client._movement_task
+        self.assertEqual([call.args for call in jog.write_value.await_args_list], [(True,), (False,)])
+
+    @patch("input_to_cmd.opc_client.create_client")
+    async def test_step_monitor_stops_after_move_returns(self, create_client):
+        jog, position = MagicMock(), MagicMock()
+        jog.write_value = AsyncMock()
+        allow_read = asyncio.Event()
+        reads = 0
+
+        async def read_position():
+            nonlocal reads
+            reads += 1
+            if reads == 1:
+                return 50.0
+            await allow_read.wait()
+            return 52.0
+
+        position.read_value = AsyncMock(side_effect=read_position)
+        client = create_client.return_value.__aenter__.return_value
+        client.get_node = MagicMock(side_effect={
+            opc_client.X_JOG_POS_NODE_ID: jog,
+            opc_client.X_POSITION_NODE_ID: position,
+        }.__getitem__)
+        await opc_client.move("move_right", step_size=2.0)
+        self.assertEqual(opc_client.get_running_command(), "move_right")
+        jog.write_value.assert_awaited_once_with(True)
+        allow_read.set()
+        await asyncio.wait_for(opc_client._movement_task, timeout=1)
+        self.assertIsNone(opc_client.get_running_command())
+        self.assertEqual([call.args for call in jog.write_value.await_args_list], [(True,), (False,)])
+
     @patch("input_to_cmd.opc_client.create_client")
     async def test_move_does_not_start_at_limit(self, create_client):
         jog, position = MagicMock(), MagicMock()
