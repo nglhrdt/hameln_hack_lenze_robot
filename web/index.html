@@ -1,395 +1,158 @@
 <!DOCTYPE html>
 <html lang="de">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <meta name="theme-color" content="#171c22">
-        <title>Lenze / Motion Interface</title>
-        <link rel="stylesheet" href="css.css">
-        <script src="webSpeechAPI.js" defer></script>
-    </head>
-    <body>
-        <header class="app-header">
-            <a class="brand" href="index.html">
-                <span class="brand-mark">L/</span>
-                <span>
-                    lenze
-                    <small>MOTION INTERFACE</small>
-                </span>
-            </a>
-            <span class="event-label">
-                HAMELNHACK
-                <b>2026</b>
-            </span>
-            <span class="connection-badge" id="headerConnection">Lokal · nicht verbunden</span>
-        </header>
-        <div class="app-layout">
-            <nav class="navigation" aria-label="Hauptnavigation">
-                <span class="nav-label">KONSOLE</span>
-                <button class="nav-button active" data-page="control" aria-current="page">
-                    <span>⌖</span>
-                    Steuerung
-                </button>
-                <button class="nav-button" data-page="setup">
-                    <span>⌁</span>
-                    Setup
-                </button>
-                <button class="nav-button" data-page="settings">
-                    <span>☷</span>
-                    Einstellungen
-                </button>
-                <div class="nav-bottom">
-                    <span class="vertical-line"></span>
-                    <span>
-                        SPRACHE
-                        <br>
-                        WIRD BEWEGUNG.
-                    </span>
-                    <small>PROTOTYP / V0.2</small>
-                </div>
-            </nav>
-            <main>
-                <section id="page-control" class="page" aria-labelledby="control-heading">
-                    <div class="page-heading">
-                        <div>
-                            <p class="eyebrow">OPERATOR WORKSPACE</p>
-                            <h1 id="control-heading">
-                                Steuerzentrale
-                                <span>.</span>
-                            </h1>
-                        </div>
-                        <p class="page-description">
-                            Direkte Eingabe. Klare Rückmeldung.
-                            <br>
-                            Ein Arbeitsraum für Sprache und Bewegung.
-                        </p>
-                    </div>
-                    <div class="workspace">
-
-                        <!-- Die Vorschau verändert nur die Zielposition; gesendet wird ausdrücklich per Button. -->
-                        <section class="robot-panel" aria-labelledby="robot-heading">
-                            <div class="panel-header">
-                                <h2 id="robot-heading">
-                                    Linearroboter
-                                    <span class="tag">XY / VORSCHAU</span>
-                                </h2>
-                                <button id="focusButton" class="text-button" aria-pressed="false">Ansicht vergrößern ⛶</button>
-                            </div>
-                            <div class="robot-stage" id="robotStage" tabindex="0" role="group" aria-label="Zielposition mit Maus oder Pfeiltasten wählen, durch Klick oder Enter fixieren">
-                                <div class="stage-top">
-                                    <span class="stage-label" id="targetMode">ZIEL WÄHLEN</span>
-                                    <span id="stageHint">Maus bewegen · Klick oder Tippen fixiert</span>
-                                </div>
-                                <svg id="robotDrawing" viewBox="0 0 800 500" role="img" aria-labelledby="robot-title">
-                                    <title id="robot-title">Zweiachsiger Linearroboter: X rechts/links, Y hoch/runter</title>
-                                    <defs>
-                                        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-                                            <path d="M40 0H0V40" fill="none" stroke="currentColor" stroke-width="0.7"/>
-                                        </pattern>
-                                    </defs>
-                                    <rect class="grid-layer" width="800" height="500" fill="url(#grid)"/>
-                                    <!-- Fester Rahmen und zwei Motoren, schematisch nach dem Foto. -->
-                                    <g class="machine-frame">
-                                        <path d="M70 420V80H730V420M70 420H730"/>
-                                        <rect class="horizontal-rail" x="90" y="91" width="620" height="27" rx="3"/>
-                                        <path class="belt-line" d="M95 104H705"/>
-                                        <rect class="motor" x="45" y="78" width="45" height="52" rx="5"/>
-                                        <rect class="motor" x="710" y="78" width="45" height="52" rx="5"/>
-                                        <circle class="motor-hub" cx="67" cy="104" r="9"/>
-                                        <circle class="motor-hub" cx="732" cy="104" r="9"/>
-                                        <text x="45" y="66">MOTOR 01</text>
-                                        <text x="690" y="66">MOTOR 02</text>
-                                    </g>
-                                    <!-- Ist-Position wird ausschließlich aus Roboterkoordinaten gezeichnet. -->
-                                    <g id="actualArm" class="actual-carriage" visibility="hidden">
-                                        <g id="actualRail"><rect class="vertical-rail" x="-9" y="118" width="18" height="290"/><rect class="cross-slide" x="-23" y="92" width="46" height="30" rx="3"/></g>
-                                        <g id="actualCarriage"><rect class="tool-slide" x="-20" y="-16" width="40" height="32" rx="4"/><path class="tool-tip" d="M0 16V33"/><circle r="5"/></g>
-                                    </g>
-                                    <g class="target-machine">
-                                        <g id="targetRail"><rect class="vertical-rail" x="-9" y="118" width="18" height="290"/><rect class="cross-slide" x="-23" y="92" width="46" height="30" rx="3"/></g>
-                                        <g id="targetCarriage"><rect class="tool-slide" x="-20" y="-16" width="40" height="32" rx="4"/><path class="tool-tip" d="M0 16V33"/><circle r="5"/></g>
-                                    </g>
-                                    <g id="targetMarker" class="target-marker"><circle r="31"/><path d="M-42 0H-22M22 0H42M0-42V-22M0 22V42"/></g>
-                                    <text class="axis-label" x="90" y="450">0 / 0</text>
-                                    <text class="axis-label" x="25" y="250" transform="rotate(-90 25 250)">Y · 0–100 %</text>
-                                    <text class="axis-label" x="525" y="450">X · 0–100 %</text>
-                                </svg>
-                                <div class="stage-bottom">
-                                    <span>
-                                        <i class="swatch target-swatch"></i>
-                                        Zielposition
-                                    </span>
-                                    <span>
-                                        <i class="swatch actual-swatch"></i>
-                                        Ist-Position
-                                        <b id="telemetryLabel">· keine Daten</b>
-                                    </span>
-                                    <span class="stage-scale">SCHEMATISCHE ANSICHT</span>
-                                </div>
-                            </div>
-                            <div class="position-strip">
-                                <div>
-                                    <span class="eyebrow">ZIELPOSITION</span>
-                                    <div class="coordinates">
-                                        <span>
-                                            X
-                                            <output id="coordX">50</output>
-                                        </span>
-                                        <span>
-                                            Y
-                                            <output id="coordY">50</output>
-                                        </span>
-                                        <small id="unitLabel">%</small>
-                                    </div>
-                                </div>
-                                <div class="actual-readout"><span class="eyebrow">IST-POSITION</span><output id="actualPosition">Keine Telemetrie</output></div>
-                            </div>
-                            <div class="robot-tools">
-                                <button id="unlockTargetButton" class="secondary-button" disabled>Ziel bearbeiten</button>
-                                <button id="homeButton" class="secondary-button">Ziel zurücksetzen</button>
-                                <button id="sendTargetButton" class="primary-button" disabled>Ziel an API senden</button>
-                            </div>
-                            <div class="direction-controls" role="group" aria-label="Roboter über die API in Prozent bewegen">
-                                <div class="direction-heading"><span class="eyebrow">DIREKTSTEUERUNG</span><span id="stepLabel">5 % pro Klick</span></div>
-                                <div class="direction-pad">
-                                    <button type="button" data-direction="up" class="direction-button direction-up">↑ Hoch</button>
-                                    <button type="button" data-direction="left" class="direction-button direction-left">← Links</button>
-                                    <span class="direction-center" aria-hidden="true">X / Y</span>
-                                    <button type="button" data-direction="right" class="direction-button direction-right">Rechts →</button>
-                                    <button type="button" data-direction="down" class="direction-button direction-down">↓ Runter</button>
-                                </div>
-                                <p>Ein Klick sendet die nächste Zielposition. X: links/rechts, Y: runter/hoch. Beide Achsen bleiben zwischen 0 und 100 %.</p>
-                            </div>
-                            <p id="targetStatus" class="panel-note" role="status">Zielpositionen werden nur durch Richtungstasten oder „Ziel an API senden“ übertragen.</p>
-                        </section>
-
-                        <!-- Jeder neue Erkennungsstand wird als transcript:update-Event bereitgestellt. -->
-                        <section class="speech-panel" aria-labelledby="voice-heading">
-                            <div class="panel-header">
-                                <h2 id="voice-heading">Spracheingabe</h2>
-                                <span id="recordingBadge" class="tag">BEREIT</span>
-                            </div>
-                            <div class="speech-body">
-                                <div class="voice-intro">
-                                    <span class="voice-icon" aria-hidden="true">◉</span>
-                                    <div>
-                                        <p class="eyebrow">LIVE TRANSKRIPTION</p>
-                                        <h3>Einfach aussprechen.</h3>
-                                    </div>
-                                </div>
-                                <p id="recordingStatus" class="recording-status" role="status">Bereit für deine Aufnahme.</p>
-                                <div class="record-controls">
-                                    <button id="startButton" class="primary-button">
-                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                                            <rect x="9" y="3" width="6" height="12" rx="3"/>
-                                            <path d="M6 10v2a6 6 0 0 0 12 0v-2M12 18v3m-4 0h8"/>
-                                        </svg>
-                                        Aufnahme starten
-                                    </button>
-                                    <button id="stopButton" class="secondary-button" disabled>Stop</button>
-                                </div>
-                                <div class="transcript-label">
-                                    <label for="log">Transkript</label>
-                                    <span id="transcriptCount">0 Zeichen</span>
-                                </div>
-                                <textarea id="log" rows="7" placeholder="Befehl eingeben oder Aufnahme starten …"></textarea>
-                                <div class="manual-command">
-                                    <button id="manualSendButton" class="primary-button" disabled>Text an API senden</button>
-                                    <p>Sendet den gesamten Feldinhalt. Auch mit Strg+Enter. Während der Aufnahme ist das Feld schreibgeschützt.</p>
-                                </div>
-                                <div class="transcript-actions">
-                                    <button id="copyButton" class="text-button">Kopieren</button>
-                                    <button id="downloadButton" class="text-button">Als Text laden</button>
-                                    <button id="clearButton" class="text-button">Leeren</button>
-                                </div>
-                                <div class="stream-card">
-                                    <div>
-                                        <span class="stream-icon">≋</span>
-                                        <div>
-                                            <strong>Textstream</strong>
-                                            <span id="streamStatus">Browser-Events aktiv</span>
-                                        </div>
-                                        <output id="streamCount">000</output>
-                                    </div>
-                                    <p>Die Command-API erhält endgültige Sprachsegmente, gesendeten Eingabetext und die Befehle der Richtungstasten. Zwischenstände bleiben lokal sichtbar.</p>
-                                </div>
-                                <p class="privacy-note">Spracherkennung über den Browser; Audiodaten können an dessen Erkennungsdienst gesendet werden. Mikrofonzugriff benötigt HTTPS oder localhost.</p>
-                            </div>
-                        </section>
-                    </div>
-                    <details id="apiLogPanel" class="api-log-panel" open>
-                        <summary>API-Log <span id="apiLogSummary" role="status">Noch keine Anfragen</span></summary>
-                        <div class="api-log-content">
-                            <p>Lokales Sitzungslog: Herkunft der Website, Zieladresse, JSON, Status und Antwort. „POST angefordert“ bestätigt noch keinen Eingang am Server; der Browser kann zuvor eine OPTIONS-Prüfung senden. Keys werden ausgeblendet. Eine HTTP-Bestätigung ist keine Bestätigung der Roboterbewegung.</p>
-                            <label for="apiLog">Anfragen und Antworten</label>
-                            <textarea id="apiLog" rows="12" readonly spellcheck="false" placeholder="API-Ereignisse erscheinen hier …"></textarea>
-                            <div class="button-row">
-                                <button id="copyApiLog" class="secondary-button">Log kopieren</button>
-                                <button id="clearApiLog" class="secondary-button">Log leeren</button>
-                            </div>
-                        </div>
-                    </details>
-                    <div class="activity-bar">
-                        <span id="workspaceName">LENZE / ROBOTER 01</span>
-                        <span>KI-Übersetzung &amp; Backend in Vorbereitung</span>
-                        <span class="activity-indicator">FRONTEND BEREIT</span>
-                    </div>
-                </section>
-                <section id="page-setup" class="page" aria-labelledby="setup-heading" hidden>
-                    <div class="page-heading">
-                        <div>
-                            <p class="eyebrow">VERBINDUNG &amp; ARBEITSRAUM</p>
-                            <h1 id="setup-heading">
-                                System einrichten
-                                <span>.</span>
-                            </h1>
-                        </div>
-                        <p class="page-description">
-                            Lokal arbeiten.
-                            <br>
-                            Backend anschließen, sobald es bereit ist.
-                        </p>
-                    </div>
-                    <div class="setup-grid">
-                        <section class="card">
-                            <p class="eyebrow">TRANSPORT</p>
-                            <h2>Backend-Verbindung</h2>
-                            <p>HTTP-API für den Transkript-Stream. Der WebSocket darunter bleibt für Roboterkoordinaten und Ziele verfügbar.</p>
-                            <label for="robotName">Systemname</label>
-                            <input id="robotName" maxlength="60" value="Lenze / Roboter 01">
-                            <label for="apiUrl">Transkript-API (HTTP POST)</label>
-                            <input id="apiUrl" type="url" placeholder="/command">
-                            <label for="apiKey">API-Key (optional, nur für diese Sitzung)</label>
-                            <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Key später eintragen">
-                            <label class="check-row">
-                                <input id="forwardApi" type="checkbox" checked>
-                                <span>Abgeschlossene Sprachsegmente an die Command-API senden</span>
-                            </label>
-                            <p id="apiStatus" class="field-note" role="status">Command-API vorbereitet.</p>
-                            <p class="field-note">Key wird nicht gespeichert. Dauerhafte Anbieter-Keys gehören ins Backend. Die API muss Browserzugriffe (CORS) und bei Key-Nutzung den Authorization-Header erlauben.</p>
-                            <label for="endpoint">Roboter-WebSocket-Adresse</label>
-                            <input id="endpoint" type="url" placeholder="ws://localhost:8080">
-                            <div class="button-row">
-                                <button id="connectButton" class="primary-button">Verbinden</button>
-                                <button id="disconnectButton" class="secondary-button" disabled>Trennen</button>
-                            </div>
-                            <p id="connectionStatus" class="field-note" role="status">Nicht verbunden. Text bleibt lokal verfügbar.</p>
-                            <label class="check-row">
-                                <input id="forwardTranscript" type="checkbox">
-                                <span>Transkripte zusätzlich über WebSocket senden</span>
-                            </label>
-                            <p class="field-note">Sprachbefehle gehen bei aktiver Weiterleitung an die Command-API. Richtungstasten und „Ziel an API senden“ verwenden dieselbe Command-API mit Prozentwerten im Text.</p>
-                        </section>
-                        <section class="card">
-                            <p class="eyebrow">KOORDINATEN</p>
-                            <h2>Arbeitsraum</h2>
-                            <p>X rechts/links und Y hoch/runter: Beide Achsen verwenden 0 bis 100 %. Der Ursprung (0 / 0) liegt in der Vorschau links unten.</p>
-                            <label for="directionStep">Schrittweite je Richtungsklick (%)</label>
-                            <input id="directionStep" type="number" min="1" max="100" step="1" value="5" required>
-                            <p class="field-note">Die Schrittweite wird zur gewählten Zielposition addiert. Prozentpositionen und Richtungsbewegungen müssen vom Backend ausgeführt werden können.</p>
-                            <label for="language">Erkennungssprache</label>
-                            <select id="language">
-                                <option value="de-DE">Deutsch · de-DE</option>
-                                <option value="en-US">English · en-US</option>
-                            </select>
-                            <p class="field-note">Die Sprache lässt sich bei gestoppter Aufnahme ändern. Die Prozentanzeige setzt einen passend kalibrierten Roboter voraus.</p>
-                        </section>
-                    </div>
-
-                    <!-- Vorläufiger Adaptervertrag, bis das echte Backend-Format feststeht. -->
-                    <details class="protocol-card">
-                        <summary>API- und Stream-Schnittstelle / vorläufiges Format</summary>
-                        <div class="protocol-content">
-                            <p>Richtungstaste „Hoch“ bei Start (50 / 50) und 5-%-Schritt: <code>{"inputType":"text","data":"Fahre nach oben. Zielposition: X=50 %, Y=55 % (jeweils 0 bis 100 Prozent)."}</code>. Es werden keine Millimeter gesendet.</p>
-                            <p>Command-API: <code>POST {protocol}//{host}/command</code> mit <code>{"inputType":"text","data":"Dein Befehl"}</code>. Übertragen werden endgültige Sprachsegmente, manuell gesendete Texte und die Befehle der Richtungstasten. Browser-Events behalten das unten gezeigte Stream-Format. Requests werden nacheinander verarbeitet.</p>
-                            <p>Bei Netzwerkfehlern wird die API-Weiterleitung pausiert. Nicht bestätigte Nachrichten werden nicht automatisch wiederholt. Die API muss eine erfolgreiche Verarbeitung mit einem 2xx-Status bestätigen. Ein optionales Telemetrie-JSON in der Antwort aktualisiert den Phantomschlitten.</p>
-                            <p>
-                                Im Browser:
-                                <code>window.addEventListener("transcript:update", event =&gt; console.log(event.detail))</code>
-                            </p>
-                            <p>
-                                Ein Segment behält seine ID während der Überarbeitung.
-                                <code>text</code>
-                                ersetzt den bisherigen Segmenttext.
-                                <code>isFinal</code>
-                                markiert den Abschluss.
-                                <code>fullText</code>
-                                ist der aktuelle Gesamttext. Zwischenstände nicht einfach aneinanderhängen.
-                            </p>
-                            <pre>{"type":"transcript","sessionId":"…","segmentId":"…:0","sequence":1,
- "text":"Bewege den Arm","isFinal":false,"fullText":"Bewege den Arm",
- "language":"de-DE","timestamp":"…"}</pre>
-                            <p>
-                                Abschluss einer Aufnahme:
-                                <code>{"type":"transcript.end","sessionId":"…","sequence":2,"reason":"stopped"}</code>
-                                . Abbruch oder Fehler schließt vorläufige Segmente nicht als endgültig ab. Nicht verbundene Nachrichten werden nicht nachträglich gesendet.
-                            </p>
-                            <p>
-                                Lokales Ziel-Event (zusätzlich zum API-Request):
-                                <code>{"type":"target","position":{"x":50,"y":55},"units":"percent"}</code>
-                            </p>
-                            <p>
-                                Ist-Position empfangen:
-                                <code>{"type":"telemetry","position":{"x":48,"y":52},"units":"percent"}</code>
-                                . Ohne WebSocket kann ein Adapter dieselben Daten über
-                                <code>window.motionInterface.updateTelemetry(message)</code>
-                                einspielen.
-                            </p>
-                            <p>API-Anfragen und Antworten stehen im Logfenster der Steuerungsansicht. Bei HTTPS-Seiten ist die HTTP-API durch Mixed Content blockiert; localhost oder einen HTTPS-Proxy verwenden.</p>
-                        </div>
-                    </details>
-                </section>
-                <section id="page-settings" class="page" aria-labelledby="settings-heading" hidden>
-                    <div class="page-heading">
-                        <div>
-                            <p class="eyebrow">DEIN ARBEITSPLATZ</p>
-                            <h1 id="settings-heading">
-                                Ansicht anpassen
-                                <span>.</span>
-                            </h1>
-                        </div>
-                        <p class="page-description">
-                            Einstellungen werden auf
-                            <br>
-                            diesem Gerät gespeichert.
-                        </p>
-                    </div>
-                    <div class="setup-grid">
-                        <section class="card">
-                            <p class="eyebrow">DARSTELLUNG</p>
-                            <h2>Arbeitsraum-Ansicht</h2>
-                            <label class="check-row">
-                                <input id="showGrid" type="checkbox" checked>
-                                <span>Koordinatenraster anzeigen</span>
-                            </label>
-                            <label class="check-row">
-                                <input id="showActual" type="checkbox" checked>
-                                <span>Phantomschlitten bei verfügbarer Telemetrie anzeigen</span>
-                            </label>
-                            <label for="actualOpacity">Deckkraft des Phantomschlittens</label>
-                            <input id="actualOpacity" type="range" min="10" max="80" value="30">
-                        </section>
-                        <section class="card">
-                            <p class="eyebrow">TRANSKRIPTION</p>
-                            <h2>Stream-Verhalten</h2>
-                            <label class="check-row">
-                                <input id="sendInterim" type="checkbox" checked>
-                                <span>Auch Zwischenstände an den Stream ausgeben</span>
-                            </label>
-                            <p>Das Transkript zeigt Zwischenstände immer an. Dies betrifft Browser-Events und den optionalen WebSocket. Die Command-API erhält keine Zwischenstände.</p>
-                            <label class="check-row">
-                                <input id="autoRestart" type="checkbox" checked>
-                                <span>Nach automatischem Browser-Stopp weiter aufnehmen</span>
-                            </label>
-                            <p>Kein automatischer Neustart nach Stop, Tab-Wechsel im Browser oder Aufnahmefehler.</p>
-                            <button id="resetSettings" class="secondary-button">Einstellungen zurücksetzen</button>
-                            <p class="field-note">Das Transkript wird nicht dauerhaft gespeichert.</p>
-                        </section>
-                    </div>
-                </section>
-                <p id="appNotice" class="app-notice" role="status"></p>
-                <noscript>Bitte aktiviere JavaScript für Navigation, Vorschau und Spracherkennung.</noscript>
-            </main>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lenze Robot Control</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@6.0.0-alpha.1/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-B/GM4XqrwHnWXNOWMbloTmrYXZg10cakYGmpfsR/bbzQ6JAJI4ihuyADKLnBgrCe" crossorigin="anonymous">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .card {
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+            max-width: 500px;
+        }
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .btn.loading {
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="card-header bg-primary text-white">
+            <h5 class="card-title mb-0">Lenze Roboter Steuerung</h5>
         </div>
-    </body>
+        <div class="card-body">
+            <p class="card-text">
+                Willkommen zur Roboter-Steuerungsoberfläche. 
+            <div class="d-flex justify-content-center">
+                <div style="width: 240px;">
+                    <!-- Row 1 -->
+                    <div class="d-grid gap-2 mb-2" style="grid-template-columns: 1fr 1fr 1fr;">
+                        <div></div>
+                        <button class="btn btn-primary rounded-pill p-3" data-command="move_up">
+                            <i class="bi bi-arrow-up" style="font-size: 1.5rem;"></i>
+                        </button>
+                        <div></div>
+                    </div>
+                    
+                    <!-- Row 2 -->
+                    <div class="d-grid gap-2 mb-2" style="grid-template-columns: 1fr 1fr 1fr;">
+                        <button class="btn btn-primary rounded-pill p-3" data-command="move_left">
+                            <i class="bi bi-arrow-left" style="font-size: 1.5rem;"></i>
+                        </button>
+                        <button class="btn btn-danger rounded-pill p-3" data-command="stop">
+                            <i class="bi bi-stop-fill" style="font-size: 1.5rem;"></i>
+                        </button>
+                        <button class="btn btn-primary rounded-pill p-3" data-command="move_right">
+                            <i class="bi bi-arrow-right" style="font-size: 1.5rem;"></i>
+                        </button>
+                    </div>
+                    
+                    <!-- Row 3 -->
+                    <div class="d-grid gap-2" style="grid-template-columns: 1fr 1fr 1fr;">
+                        <div></div>
+                        <button class="btn btn-primary rounded-pill p-3" data-command="move_down">
+                            <i class="bi bi-arrow-down" style="font-size: 1.5rem;"></i>
+                        </button>
+                        <div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="card-footer text-muted d-flex justify-content-between align-items-center">
+            <small>Version 1.0 | Lenze AI Robot</small>
+            <button type="button" class="btn btn-primary btn-sm rounded-pill" data-command="home">
+                <i class="bi bi-house" aria-hidden="true"></i> Home
+            </button>
+        </div>
+    </div>
+
+    <script type="module" src="https://cdn.jsdelivr.net/npm/bootstrap@6.0.0-alpha.1/dist/js/bootstrap.bundle.min.js" integrity="sha384-1a/pXj49ZQ1aHEmrJ+gMw1otqoVsYwlEnlD8mIfY2TV03r20Y0CN7uqx1tQogjPL" crossorigin="anonymous"></script>
+    <script>
+        const COMMANDS = ["home", "move_right", "move_up", "move_left", "move_down", "stop"];
+        
+        async function executeInstantCommand(command) {
+            if (!COMMANDS.includes(command)) {
+                console.error(`Invalid command: ${command}`);
+                return;
+            }
+            
+            try {
+                const response = await fetch("/command", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        inputType: "instantCommand",
+                        data: command,
+                    }),
+                });
+                
+                if (!response.ok) {
+                    console.error(`Command execution failed: ${response.status} ${response.statusText}`);
+                    return;
+                }
+                
+                const result = await response.json();
+                console.log(`Command executed: ${command}`, result);
+            } catch (error) {
+                console.error(`Error executing command: ${error}`);
+            }
+        }
+        
+        document.addEventListener("DOMContentLoaded", function() {
+            document.querySelectorAll("[data-command]").forEach(button => {
+                button.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    const command = this.getAttribute("data-command");
+                    this.disabled = true;
+                    this.classList.add("loading");
+                    
+                    executeInstantCommand(command).finally(() => {
+                        this.disabled = false;
+                        this.classList.remove("loading");
+                    });
+                });
+            });
+
+            const keyboardCommands = new Map([
+                ["ArrowUp", "move_up"],
+                ["ArrowLeft", "move_left"],
+                ["ArrowRight", "move_right"],
+                ["ArrowDown", "move_down"],
+                ["h", "home"],
+                ["s", "stop"],
+            ]);
+
+            document.addEventListener("keydown", function(e) {
+                if (e.ctrlKey || e.altKey || e.metaKey || e.isComposing ||
+                    (e.target instanceof HTMLElement &&
+                        (e.target.isContentEditable || e.target.closest("input, textarea, select")))) {
+                    return;
+                }
+
+                const command = keyboardCommands.get(e.key.length === 1 ? e.key.toLowerCase() : e.key);
+                if (!command) {
+                    return;
+                }
+                e.preventDefault();
+                if (!e.repeat) {
+                    document.querySelector(`[data-command="${command}"]`).click();
+                }
+            });
+        });
+    </script>
+</body>
 </html>

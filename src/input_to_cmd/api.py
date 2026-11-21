@@ -59,7 +59,7 @@ EXTRACTION_INSTRUCTIONS = (
 
 
 class CommandInput(BaseModel):
-    inputType: Literal["text"]
+    inputType: Literal["text", "instantCommand"]
     data: StrictStr
 
 
@@ -93,9 +93,16 @@ def extract_command(content: CommandInput) -> str:
 @app.post("/command")
 async def command(content: CommandInput) -> dict[str, str]:
     logger.debug("Received %s input (%d characters)", content.inputType, len(content.data))
-    logger.debug("Requesting command extraction with model %s", MODEL)
-    extracted = await run_in_threadpool(extract_command, content)
-
+    
+    if content.inputType == "instantCommand":
+        extracted = content.data.strip().lower()
+        if extracted not in COMMANDS:
+            logger.warning("Invalid instant command: %s", extracted)
+            raise HTTPException(status_code=422, detail=f"Invalid command. Valid commands are: {', '.join(COMMANDS)}")
+    else:
+        logger.debug("Requesting command extraction with model %s", MODEL)
+        extracted = await run_in_threadpool(extract_command, content)
+    
     logger.debug("Extracted command: %s", extracted)
     print(extracted, flush=True)
     try:

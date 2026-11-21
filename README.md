@@ -52,6 +52,9 @@ From another device, replace `localhost` with the API machine's IP address.
 Microphone access requires HTTPS or localhost in most browsers. The page's
 command API URL is configurable in its settings.
 
+Use the arrow keys for movement, `H` for home, and `S` for stop. Releasing a
+movement key does not stop the robot; use the stop control.
+
 Browser CORS preflight requests are supported. All origins are allowed by
 default (`CORS_ALLOWED_ORIGINS=*`). To restrict them, set
 `CORS_ALLOWED_ORIGINS` in `.env` to a comma-separated list of exact frontend
