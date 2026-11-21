@@ -335,58 +335,14 @@ h2 .tag {
     opacity: .45;
 }
 
-.reach-ring {
-    stroke: #728aa722;
-    stroke-width: 1;
-    fill: none;
-    stroke-dasharray: 3 8;
-}
 
-.base-line {
-    stroke: #74869b;
-    stroke-width: 7;
-}
 
-.virtual-arm path {
-    fill: none;
-    stroke: #d4dde5;
-    stroke-width: 23;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-}
 
-.virtual-arm .arm-shadow {
-    stroke: #080d14;
-    stroke-width: 40;
-    transform: translate(4px, 6px);
-}
 
-.virtual-arm circle {
-    fill: #075df2;
-    stroke: #9cc3ff;
-    stroke-width: 4;
-}
 
-.virtual-arm .base-joint {
-    fill: #273b50;
-    stroke: #8ca4ba;
-}
 
-.actual-arm {
-    opacity: .3;
-}
 
-.actual-arm path {
-    stroke: #9eaebe;
-    stroke-width: 25;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    fill: none;
-}
 
-.actual-arm circle {
-    fill: #9eaebe;
-}
 
 .target-marker {
     stroke: var(--yellow);
@@ -398,10 +354,6 @@ h2 .tag {
     stroke-dasharray: 3 6;
 }
 
-#gripperDrawing {
-    stroke-width: 4;
-    stroke-linecap: round;
-}
 
 .axis-label {
     fill: #899aaa;
@@ -483,20 +435,7 @@ h2 .tag {
     font-size: 10px;
 }
 
-.gripper-button {
-    border: 1px solid var(--line);
-    background: #f7f9fb;
-    color: var(--muted);
-    padding: 10px 13px;
-    font-size: 11px;
-}
 
-.gripper-button b {
-    display: block;
-    color: var(--blue);
-    margin-top: 4px;
-    font-size: 13px;
-}
 
 .robot-tools {
     display: flex;
@@ -801,7 +740,7 @@ input[type=checkbox] {
 
 .field-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
 }
 
@@ -1150,7 +1089,7 @@ body.focus-mode #robotDrawing {
 
 }
 
-/* Fixiertes Ziel und unabhängiger Phantomarm. */
+/* Fixiertes Ziel und unabhängige Ist-Position. */
 .robot-stage.target-locked {
     cursor: default;
 }
@@ -1164,13 +1103,6 @@ body.focus-mode #robotDrawing {
 }
 .robot-tools {
     flex-wrap: wrap;
-}
-.actual-arm path {
-    stroke: #a8c8f8;
-    stroke-dasharray: 9 5;
-}
-.actual-arm circle {
-    fill: #a8c8f8;
 }
 
 .manual-command {
@@ -1233,4 +1165,143 @@ body.focus-mode #robotDrawing {
 }
 body.focus-mode .api-log-panel {
     display: none;
+}
+
+/* Zweiachsiger Linearroboter, schematisch nach dem realen Aufbau. */
+.machine-frame > path {
+    fill: none;
+    stroke: #526477;
+    stroke-width: 10;
+}
+.machine-frame .horizontal-rail {
+    fill: #a8b4c0;
+    stroke: #e0e8ef;
+    stroke-width: 2;
+}
+.machine-frame .belt-line {
+    stroke: #334454;
+    stroke-width: 3;
+    stroke-dasharray: 4 3;
+}
+.machine-frame .motor {
+    fill: #202b39;
+    stroke: #7f94aa;
+    stroke-width: 2;
+}
+.machine-frame .motor-hub {
+    fill: #91a3b4;
+    stroke: #1b2838;
+    stroke-width: 3;
+}
+.machine-frame text {
+    fill: #8fa0b3;
+    font: 10px var(--mono);
+    letter-spacing: 1px;
+}
+.target-machine .vertical-rail {
+    fill: #9aaebe;
+    stroke: #dae7f0;
+    stroke-width: 2;
+}
+.target-machine .cross-slide {
+    fill: #293d53;
+    stroke: #9baec3;
+    stroke-width: 2;
+}
+.target-machine .tool-slide {
+    fill: var(--blue);
+    stroke: #a8ccff;
+    stroke-width: 2;
+}
+.target-machine .tool-tip {
+    fill: none;
+    stroke: #d2e3f2;
+    stroke-width: 5;
+}
+.target-machine circle {
+    fill: var(--yellow);
+}
+.actual-carriage rect {
+    fill: #9dbfef;
+    stroke: #d4e7ff;
+    stroke-width: 2;
+    stroke-dasharray: 5 3;
+}
+.actual-carriage path {
+    stroke: #d4e7ff;
+    stroke-width: 5;
+}
+.actual-carriage circle {
+    fill: #d4e7ff;
+}
+.actual-readout {
+    margin-left: auto;
+    text-align: right;
+}
+.actual-readout output {
+    display: block;
+    margin-top: 10px;
+    color: var(--muted);
+    font: 12px var(--mono);
+}
+
+/* Einzelne Klicks senden begrenzte Prozentziele, kein Dauerlauf. */
+.direction-controls {
+    padding: 20px;
+    margin-top: 12px;
+    border-top: 1px solid var(--line);
+    background: #f7f9fc;
+}
+.direction-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+#stepLabel {
+    color: var(--blue);
+    font: 11px var(--mono);
+}
+.direction-pad {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    max-width: 420px;
+    margin: 0 auto;
+}
+.direction-button {
+    min-height: 48px;
+    padding: 10px 8px;
+    border: 1px solid #b7cbed;
+    border-radius: 4px;
+    background: #edf4ff;
+    color: #134aab;
+    font-size: 14px;
+    font-weight: 600;
+    touch-action: manipulation;
+}
+.direction-button:hover:not(:disabled) {
+    background: #dceaff;
+}
+.direction-button:active:not(:disabled) {
+    background: #c4daff;
+}
+.direction-up { grid-column: 2; grid-row: 1; }
+.direction-left { grid-column: 1; grid-row: 2; }
+.direction-right { grid-column: 3; grid-row: 2; }
+.direction-down { grid-column: 2; grid-row: 3; }
+.direction-center {
+    grid-column: 2;
+    grid-row: 2;
+    display: grid;
+    place-items: center;
+    color: #8494ab;
+    font: 12px var(--mono);
+}
+.direction-controls > p {
+    margin-top: 16px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.7;
 }
