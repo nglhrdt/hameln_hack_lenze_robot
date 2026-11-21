@@ -258,7 +258,7 @@
                             <label for="robotName">Systemname</label>
                             <input id="robotName" maxlength="60" value="Lenze / Roboter 01">
                             <label for="apiUrl">Transkript-API (HTTP POST)</label>
-                            <input id="apiUrl" type="url" value="http://192.168.5.204:8000/command" placeholder="/command">
+                            <input id="apiUrl" type="url" placeholder="/command">
                             <label for="apiKey">API-Key (optional, nur für diese Sitzung)</label>
                             <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Key später eintragen">
                             <label class="check-row">
@@ -301,7 +301,7 @@
                         <summary>API- und Stream-Schnittstelle / vorläufiges Format</summary>
                         <div class="protocol-content">
                             <p>Richtungstaste „Hoch“ bei Start (50 / 50) und 5-%-Schritt: <code>{"inputType":"text","data":"Fahre nach oben. Zielposition: X=50 %, Y=55 % (jeweils 0 bis 100 Prozent)."}</code>. Es werden keine Millimeter gesendet.</p>
-                            <p>Command-API: <code>POST http://192.168.5.204:8000/command</code> mit <code>{"inputType":"text","data":"Dein Befehl"}</code>. Übertragen werden endgültige Sprachsegmente, manuell gesendete Texte und die Befehle der Richtungstasten. Browser-Events behalten das unten gezeigte Stream-Format. Requests werden nacheinander verarbeitet.</p>
+                            <p>Command-API: <code>POST {protocol}//{host}/command</code> mit <code>{"inputType":"text","data":"Dein Befehl"}</code>. Übertragen werden endgültige Sprachsegmente, manuell gesendete Texte und die Befehle der Richtungstasten. Browser-Events behalten das unten gezeigte Stream-Format. Requests werden nacheinander verarbeitet.</p>
                             <p>Bei Netzwerkfehlern wird die API-Weiterleitung pausiert. Nicht bestätigte Nachrichten werden nicht automatisch wiederholt. Die API muss eine erfolgreiche Verarbeitung mit einem 2xx-Status bestätigen. Ein optionales Telemetrie-JSON in der Antwort aktualisiert den Phantomschlitten.</p>
                             <p>
                                 Im Browser:
