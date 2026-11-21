@@ -199,6 +199,49 @@ class DispatcherTests(unittest.IsolatedAsyncioTestCase):
 
 
 class OpcClientTests(unittest.IsolatedAsyncioTestCase):
+    @patch("input_to_cmd.opc_client.create_client")
+    async def test_get_running_command_reports_active_movement(self, create_client):
+        jog, position = MagicMock(), MagicMock()
+        jog.write_value = AsyncMock()
+        read_count = 0
+
+        async def read_position():
+            nonlocal read_count
+            read_count += 1
+            if read_count > 1:
+                await asyncio.Future()
+            return 20.0
+
+        position.read_value = AsyncMock(side_effect=read_position)
+        client = create_client.return_value.__aenter__.return_value
+        client.get_node = MagicMock(side_effect=lambda node: {
+            opc_client.X_JOG_NEG_NODE_ID: jog,
+            opc_client.X_POSITION_NODE_ID: position,
+        }[node])
+
+        await opc_client.move("move_left")
+        self.assertEqual(opc_client.get_running_command(), "move_left")
+
+        await opc_client.shutdown_movement()
+        self.assertIsNone(opc_client.get_running_command())
+
+    @patch("input_to_cmd.opc_client.create_client")
+    async def test_get_position_returns_x_and_z_coordinates(self, create_client):
+        x_position, z_position = MagicMock(), MagicMock()
+        x_position.read_value = AsyncMock(return_value=123.4)
+        z_position.read_value = AsyncMock(return_value=56.7)
+        client = create_client.return_value.__aenter__.return_value
+        client.get_node = MagicMock(side_effect=lambda node: {
+            opc_client.X_POSITION_NODE_ID: x_position,
+            opc_client.Z_POSITION_NODE_ID: z_position,
+        }[node])
+
+        position = await opc_client.get_position()
+
+        self.assertEqual(position, (123.4, 56.7))
+        x_position.read_value.assert_awaited_once_with()
+        z_position.read_value.assert_awaited_once_with()
+
     @patch("input_to_cmd.opc_client.asyncio.sleep", new_callable=AsyncMock)
     @patch("input_to_cmd.opc_client.create_client")
     async def test_home_waits_for_stable_velocities_and_resets(self, create_client, sleep):

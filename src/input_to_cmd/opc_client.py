@@ -20,7 +20,7 @@ MOVE_POLL_INTERVAL_SECONDS = 0.1
 MOVEMENT_COMMANDS: dict[str, tuple[str, str, float, Callable[[float, float], bool]]] = {
     "move_left": (X_JOG_NEG_NODE_ID, X_POSITION_NODE_ID, 16.0, le),
     "move_right": (X_JOG_POS_NODE_ID, X_POSITION_NODE_ID, 319.0, ge),
-    "move_down": (Z_JOG_NEG_NODE_ID, Z_POSITION_NODE_ID, -11.0, le),
+    "move_down": (Z_JOG_NEG_NODE_ID, Z_POSITION_NODE_ID, -8.0, le),
     "move_up": (Z_JOG_POS_NODE_ID, Z_POSITION_NODE_ID, 155.0, ge),
 }
 VELOCITY_TOLERANCE = 0.0001
@@ -29,6 +29,7 @@ VELOCITY_STABLE_READINGS = 3
 SESSION_TIMEOUT_MS = 900_000
 logger = logging.getLogger(__name__)
 _movement_task: asyncio.Task[None] | None = None
+_movement_command: str | None = None
 _movement_lock: asyncio.Lock | None = None
 _movement_loop: asyncio.AbstractEventLoop | None = None
 
@@ -39,17 +40,31 @@ def create_client() -> Client:
     return client
 
 
+def get_running_command() -> str | None:
+    if _movement_task is None or _movement_task.done():
+        return None
+    return _movement_command
+
+
+async def get_position() -> tuple[float, float]:
+    async with create_client() as client:
+        x_position = await client.get_node(X_POSITION_NODE_ID).read_value()
+        z_position = await client.get_node(Z_POSITION_NODE_ID).read_value()
+    return x_position, z_position
+
+
 async def move(command: str) -> None:
     if command not in MOVEMENT_COMMANDS:
         raise ValueError(f"Unknown movement command: {command}")
 
-    global _movement_task
+    global _movement_command, _movement_task
     async with _get_movement_lock():
         await _cancel_movement()
         started = asyncio.get_running_loop().create_future()
         task = asyncio.create_task(_run_movement(command, started))
         task.add_done_callback(_report_movement_failure)
         _movement_task = task
+        _movement_command = command
         try:
             await started
         except BaseException:
@@ -61,6 +76,7 @@ async def move(command: str) -> None:
                 pass
             finally:
                 _movement_task = None
+                _movement_command = None
             raise
 
 
@@ -84,9 +100,10 @@ def _report_movement_failure(task: asyncio.Task[None]) -> None:
 
 
 async def _cancel_movement() -> None:
-    global _movement_task
+    global _movement_command, _movement_task
     task = _movement_task
     _movement_task = None
+    _movement_command = None
     if task is not None:
         if not task.done():
             task.cancel()
