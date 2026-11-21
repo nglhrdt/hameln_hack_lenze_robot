@@ -11,13 +11,26 @@
         body {
             display: flex;
             align-items: center;
+            align-content: center;
             justify-content: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+            padding: 1rem;
             min-height: 100vh;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         }
         .card {
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+            flex: 0 1 500px;
+            width: 100%;
             max-width: 500px;
+        }
+        .device-view {
+            display: block;
+            width: 100%;
+            height: auto;
+            aspect-ratio: 16 / 9;
+            border: 0;
         }
         .btn:disabled {
             opacity: 0.6;
@@ -26,8 +39,14 @@
         .btn.loading {
             pointer-events: none;
         }
+        #text-command-spinner[hidden] {
+            display: none !important;
+        }
         .btn.command-active {
             box-shadow: 0 0 0 4px #ffc107;
+        }
+        [data-kasten-only][hidden] {
+            display: none !important;
         }
         .image-marquee {
             position: fixed;
@@ -55,12 +74,20 @@
 </head>
 <body>
     <div class="card">
-        <div class="card-header bg-primary text-white">
+        <div class="card-header bg-primary text-white d-flex flex-wrap justify-content-between align-items-center gap-2">
             <h5 class="card-title mb-0">Lenze Roboter Steuerung</h5>
+            <label class="visually-hidden" for="device-type">Gerätetyp</label>
+            <select class="form-select form-select-sm w-auto" id="device-type">
+                <option value="kasten">Kasten</option>
+                <option value="raeder">Räder</option>
+            </select>
         </div>
         <div class="card-body">
             <p class="card-text">
                 Willkommen zur Roboter-Steuerungsoberfläche. 
+            </p>
+            <p class="text-center mb-0" id="position">X: -- | Z: --</p>
+            <p class="text-center text-muted small mb-2" id="status">Verbindung wird hergestellt...</p>
             <div class="d-flex justify-content-center">
                 <div style="width: 240px;">
                     <!-- Row 1 -->
@@ -94,15 +121,43 @@
                         <div></div>
                     </div>
                 </div>
-                <p class="text-center mt-3 mb-0" id="position">X: -- | Z: --</p>
-                <p class="text-center text-muted small mb-0" id="status">Verbindung wird hergestellt...</p>
             </div>
+            <p class="text-center small mb-0" id="hidden-command" aria-live="polite"></p>
         </div>
-        <div class="card-footer text-muted d-flex justify-content-between align-items-center">
-            <small>Version 1.0 | Lenze AI Robot</small>
-            <button type="button" class="btn btn-primary btn-sm rounded-pill" data-command="home">
-                <i class="bi bi-house" aria-hidden="true"></i> Home
-            </button>
+        <div class="card-footer text-muted">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <small>Version 1.0 | Lenze AI Robot</small>
+                <button type="button" class="btn btn-primary btn-sm rounded-pill" data-command="home" data-kasten-only>
+                    <i class="bi bi-house" aria-hidden="true"></i> Home
+                </button>
+            </div>
+            <small class="d-block mt-2">Ein Gerätetyp-Wechsel stoppt keine Bewegung.</small>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header bg-primary text-white">
+            <h5 class="card-title mb-0">Textbefehl</h5>
+        </div>
+        <div class="card-body">
+            <form id="text-command-form">
+                <label class="form-label" for="text-command">Befehl</label>
+                <textarea class="form-control" id="text-command" rows="4" aria-describedby="text-command-hint" required></textarea>
+                <p class="form-text mb-3" id="text-command-hint">Strg + Eingabe zum Senden</p>
+                <button class="btn btn-primary" type="submit">
+                    <span class="spinner-border spinner-border-sm me-1" id="text-command-spinner" aria-hidden="true" hidden></span>Senden
+                </button>
+                <p class="small mt-2 mb-0" id="text-command-status" role="status"></p>
+            </form>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header bg-primary text-white">
+            <h5 class="card-title mb-0">Geräteansicht</h5>
+        </div>
+        <div class="card-body">
+            <iframe class="device-view" src="http://192.168.5.203:5000" title="Geräteansicht"></iframe>
         </div>
     </div>
 
@@ -145,6 +200,82 @@
         }
         
         document.addEventListener("DOMContentLoaded", function() {
+            const textForm = document.getElementById("text-command-form");
+            const textInput = document.getElementById("text-command");
+            const textStatus = document.getElementById("text-command-status");
+            const textSubmit = textForm.querySelector('button[type="submit"]');
+            const textSpinner = document.getElementById("text-command-spinner");
+
+            textInput.addEventListener("keydown", function(e) {
+                if (e.key === "Enter" && e.ctrlKey && !e.altKey && !e.metaKey &&
+                    !e.shiftKey && !e.isComposing) {
+                    e.preventDefault();
+                    if (!e.repeat && !textSubmit.disabled) {
+                        textForm.requestSubmit(textSubmit);
+                    }
+                }
+            });
+
+            textForm.addEventListener("submit", async function(e) {
+                e.preventDefault();
+                if (textSubmit.disabled) {
+                    return;
+                }
+                const text = textInput.value;
+                if (!text.trim()) {
+                    textStatus.classList.add("text-danger");
+                    textStatus.textContent = "Bitte einen Befehl eingeben.";
+                    return;
+                }
+
+                textSubmit.disabled = true;
+                textSubmit.setAttribute("aria-busy", "true");
+                textSpinner.hidden = false;
+                textStatus.classList.remove("text-danger");
+                textStatus.textContent = "Befehl wird verarbeitet...";
+                try {
+                    const response = await fetch("/command", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({inputType: "text", data: text}),
+                    });
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    if (textInput.value === text) {
+                        textInput.value = "";
+                    }
+                    textStatus.textContent = "Befehl gesendet.";
+                } catch (error) {
+                    console.error("Text command failed", error);
+                    textStatus.classList.add("text-danger");
+                    textStatus.textContent = `Befehl konnte nicht gesendet werden: ${error.message}`;
+                } finally {
+                    textSpinner.hidden = true;
+                    textSubmit.removeAttribute("aria-busy");
+                    textSubmit.disabled = false;
+                }
+            });
+
+            const deviceType = document.getElementById("device-type");
+            const hiddenCommand = document.getElementById("hidden-command");
+
+            function updateHiddenCommand() {
+                const activeButton = document.querySelector("[data-command].command-active");
+                hiddenCommand.textContent = activeButton && activeButton.closest("[hidden]")
+                    ? `Aktiver Befehl: ${activeButton.dataset.command}`
+                    : "";
+            }
+
+            function updateDeviceType() {
+                document.querySelectorAll("[data-kasten-only]").forEach(element => {
+                    element.hidden = deviceType.value === "raeder";
+                });
+                updateHiddenCommand();
+            }
+            deviceType.addEventListener("change", updateDeviceType);
+            updateDeviceType();
+
             document.querySelectorAll("[data-command]").forEach(button => {
                 button.addEventListener("click", function(e) {
                     e.preventDefault();
@@ -179,9 +310,13 @@
                 if (!command) {
                     return;
                 }
+                const button = document.querySelector(`[data-command="${command}"]`);
+                if (button.closest("[hidden]")) {
+                    return;
+                }
                 e.preventDefault();
                 if (!e.repeat) {
-                    document.querySelector(`[data-command="${command}"]`).click();
+                    button.click();
                 }
             });
 
@@ -191,6 +326,7 @@
 
             function clearStatus(message) {
                 buttons.forEach(button => button.classList.remove("command-active"));
+                updateHiddenCommand();
                 position.textContent = "X: -- | Z: --";
                 status.textContent = message;
             }
@@ -215,6 +351,7 @@
                     buttons.forEach(button => {
                         button.classList.toggle("command-active", button.dataset.command === state.command);
                     });
+                    updateHiddenCommand();
                     if (state.position && Number.isFinite(state.position.x) && Number.isFinite(state.position.z)) {
                         position.textContent = `X: ${state.position.x.toFixed(2)} | Z: ${state.position.z.toFixed(2)}`;
                         status.textContent = "";

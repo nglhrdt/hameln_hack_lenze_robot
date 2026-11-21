@@ -54,6 +54,17 @@ command API URL is configurable in its settings.
 
 Use the arrow keys for movement, `H` for home, and `S` for stop. Releasing a
 movement key does not stop the robot; use the stop control.
+The header selects a Kasten or Räder interface; Räder hides the home control
+and its keyboard shortcut. The arrow controls are available for both. This only
+changes the interface and does not stop movement or restrict commands from
+other clients.
+
+The text-command card sends its input to `/command` for AI interpretation;
+use the send button or Ctrl+Enter.
+
+The Geräteansicht card embeds `http://192.168.5.203:5000`. The browser must
+be able to reach that address, and the device must permit embedding. Browsers
+may block the HTTP frame if the control interface is served over HTTPS.
 
 The page connects to `/ws/status` on the same host. The server samples X and Z
 positions approximately once per second per connected client and sends JSON
