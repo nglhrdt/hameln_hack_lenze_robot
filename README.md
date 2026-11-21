@@ -36,8 +36,21 @@ curl -X POST http://127.0.0.1:8000/command \
   --data '{"inputType":"text","data":"Please go home."}'
 ```
 
-Currently only `inputType: "text"` is supported. Image, audio, and video
-inputs are not yet supported and are rejected.
+Use `inputType: "instantCommand"` with `data` to send one of the commands
+directly, without AI interpretation. To execute a path, send an ordered,
+non-empty array of objects with `x` and `z` percentages:
+
+```bash
+curl -X POST http://127.0.0.1:8000/command \
+  -H 'Content-Type: application/json' \
+  --data '{"inputType":"point","points":[{"x":0,"z":0},{"x":50,"z":50},{"x":100,"z":100}]}'
+```
+
+Each coordinate must be a number from 0 to 100. Percentages map linearly from
+the minimum to the maximum of the corresponding axis: X 16.0 to 319.0 and
+Z -8.0 to 155.0. Point commands write the profile and start the robot's path;
+the number of points cannot exceed the device's profile buffer capacity.
+Image, audio, and video inputs are not supported and are rejected.
 
 ## Web Interface
 
@@ -82,7 +95,7 @@ are not authenticated, so protect access to the API.
 The page connects to `/ws/status` on the same host. The server samples X and Z
 positions approximately once per second per connected client and sends JSON
 such as `{"command":"move_left","position":{"x":123.4,"z":56.7},"error":null}`.
-The command is `null` when no command is running; an in-progress home or stop
+The command is `null` when no command is running; an in-progress home, stop, or point
 takes precedence over movement. Failed position reads are logged and sent as
 `"position":null` with an error message. The UI clears stale status on
 disconnect and reconnects automatically. The displayed command reflects this
@@ -126,7 +139,7 @@ robot can travel beyond the requested distance before the jog is stopped.
 The text-command API does not provide a step size.
 
 The OPC client also provides `await write_points(points)` for writing to the
-`g_ascProfilePar` array. The points are written in order to the first array
+`g_ascPointBuffer` array. The points are written in order to the first array
 elements using an OPC UA index range (for example `0:5`); the remaining
 elements are not sent, so the device keeps whatever it already holds there.
 The device must support index-range writes on this array; otherwise the write

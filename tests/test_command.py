@@ -178,6 +178,47 @@ class CommandTests(unittest.TestCase):
         mock_openai.assert_not_called()
         mock_home.assert_not_awaited()
 
+    @patch("input_to_cmd.api.OpenAI")
+    @patch("input_to_cmd.command_dispatcher.write_xz_points", new_callable=AsyncMock)
+    def test_point_input_maps_percentages_and_dispatches(self, write_points, mock_openai):
+        response = self.client.post(
+            "/command",
+            json={"inputType": "point", "points": [
+                {"x": 0, "z": 100}, {"x": 50, "z": 50}, {"x": 100, "z": 0},
+            ]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        write_points.assert_awaited_once_with([(16.0, 155.0), (167.5, 73.5), (319.0, -8.0)])
+        mock_openai.assert_not_called()
+
+    @patch("input_to_cmd.api.OpenAI")
+    @patch("input_to_cmd.command_dispatcher.write_xz_points", new_callable=AsyncMock)
+    def test_invalid_points_are_rejected(self, write_points, mock_openai):
+        for points in (
+            None, [], [{"x": -1, "z": 50}], [{"x": 50, "z": 101}],
+            [{"x": True, "z": 50}], [{"x": "50", "z": 50}],
+            [{"x": 50}], [{"z": 50}], [[50, 50]],
+            [{"x": float("nan"), "z": 50}], [{"x": 50, "z": float("inf")}],
+        ):
+            with self.subTest(points=points):
+                response = self.client.post(
+                    "/command", content=json.dumps({"inputType": "point", "points": points}),
+                    headers={"Content-Type": "application/json"},
+                )
+                self.assertEqual(response.status_code, 422)
+        write_points.assert_not_awaited()
+        mock_openai.assert_not_called()
+
+    @patch("input_to_cmd.command_dispatcher.write_xz_points", new_callable=AsyncMock)
+    def test_point_write_failure_is_not_reported_as_success(self, write_points):
+        write_points.side_effect = ConnectionError("OPC failed")
+        response = self.client.post(
+            "/command", json={"inputType": "point", "points": [{"x": 50, "z": 50}]}
+        )
+        self.assertEqual(response.status_code, 500)
+        write_points.assert_awaited_once()
+
 
 class DispatcherTests(unittest.IsolatedAsyncioTestCase):
     @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
@@ -196,6 +237,35 @@ class DispatcherTests(unittest.IsolatedAsyncioTestCase):
             ("move_left",), ("move_right",), ("move_down",), ("move_up",),
         ])
         stop.assert_awaited_once_with()
+
+    @patch("input_to_cmd.command_dispatcher.get_running_movement", return_value=None)
+    @patch("input_to_cmd.command_dispatcher.write_xz_points")
+    async def test_point_command_is_tracked_and_cleared_on_failure(self, write_points, movement):
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def run_points(points):
+            started.set()
+            await release.wait()
+            raise RuntimeError("point failed")
+
+        write_points.side_effect = run_points
+        points = [(50.0, 30.0)]
+        task = asyncio.create_task(execute_command("point", points))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        self.assertEqual(command_dispatcher.get_running_command(), "point")
+        release.set()
+        with self.assertRaisesRegex(RuntimeError, "point failed"):
+            await task
+        write_points.assert_awaited_once_with(points)
+        self.assertIsNone(command_dispatcher.get_running_command())
+
+    @patch("input_to_cmd.command_dispatcher.write_xz_points", new_callable=AsyncMock)
+    async def test_point_command_requires_points(self, write_points):
+        for points in (None, []):
+            with self.subTest(points=points), self.assertRaises(ValueError):
+                await execute_command("point", points)
+        write_points.assert_not_awaited()
 
     @patch("input_to_cmd.command_dispatcher.get_running_movement", return_value="move_up")
     @patch("input_to_cmd.command_dispatcher.set_home")

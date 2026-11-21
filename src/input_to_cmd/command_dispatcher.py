@@ -1,7 +1,8 @@
 import asyncio
+from collections.abc import Sequence
 
 from .opc_client import get_running_command as get_running_movement
-from .opc_client import move, set_home, shutdown_connection, stop
+from .opc_client import move, set_home, shutdown_connection, stop, write_xz_points
 
 
 class UnsupportedCommandError(ValueError):
@@ -17,17 +18,24 @@ def get_running_command() -> str | None:
     return get_running_movement()
 
 
-async def execute_command(command: str) -> None:
+async def execute_command(
+    command: str, points: Sequence[tuple[float, float]] | None = None
+) -> None:
     if command in {"move_right", "move_up", "move_left", "move_down"}:
         await move(command)
-    elif command in {"home", "stop"}:
+    elif command in {"home", "stop", "point"}:
+        if command == "point" and not points:
+            raise ValueError("At least one point is required")
         entry = (object(), command)
         _foreground_commands.append(entry)
         try:
             if command == "home":
                 await set_home()
-            else:
+            elif command == "stop":
                 await stop()
+            else:
+                assert points is not None
+                await write_xz_points(points)
         finally:
             _foreground_commands.remove(entry)
     else:

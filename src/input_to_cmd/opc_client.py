@@ -21,15 +21,15 @@ X_JOG_NEG_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_xManJogXNeg"
 X_JOG_POS_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_xManJogXPos"
 Z_JOG_NEG_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_xManJogZNeg"
 Z_JOG_POS_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_xManJogZPos"
-PROFILE_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_ascPointBuffer"
-#PROFILE_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_ascProfilePar"
+#PROFILE_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_ascPointBuffer"
+PROFILE_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_ascProfilePar"
 PROFILE_DATA_TYPE_ID = "ns=4;s=|type|c500.Application.scProfilePar"
 PATH_EXECUTE_NODE_ID = "ns=4;s=|var|c500.Application.GVL_Exchange.g_xPathExecute"
 X_MIN = 16.0
 X_MAX = 319.0
 Z_MIN = -8.0
 Z_MAX = 155.0
-MOVE_POLL_INTERVAL_SECONDS = 0.1
+MOVE_POLL_INTERVAL_SECONDS = 0.01
 MOVEMENT_COMMANDS: dict[str, tuple[str, str, float, Callable[[float, float], bool]]] = {
     "move_left": (X_JOG_NEG_NODE_ID, X_POSITION_NODE_ID, X_MIN, le),
     "move_right": (X_JOG_POS_NODE_ID, X_POSITION_NODE_ID, X_MAX, ge),

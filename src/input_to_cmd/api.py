@@ -4,19 +4,22 @@ import math
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
-from pydantic import BaseModel, StrictStr
+from pydantic import BaseModel, Field, StrictStr, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from .command_dispatcher import UnsupportedCommandError, execute_command, get_running_command
 from .config_store import Configuration, ConfigurationStore, ConfigurationUpdate
-from .opc_client import get_position, shutdown_connection
+from .opc_client import X_MAX, X_MIN, Z_MAX, Z_MIN, get_position, shutdown_connection
 
 load_dotenv(".env")
 
@@ -29,6 +32,25 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+def _json_safe_validation_value(value: object) -> object:
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, list):
+        return [_json_safe_validation_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _json_safe_validation_value(item) for key, item in value.items()}
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    errors = _json_safe_validation_value(jsonable_encoder(exc.errors()))
+    return JSONResponse(status_code=422, content={"detail": errors})
+
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
@@ -66,9 +88,27 @@ EXTRACTION_INSTRUCTIONS = (
 )
 
 
+Percentage = Annotated[float, Field(strict=True, ge=0, le=100, allow_inf_nan=False)]
+
+
+class PointInput(BaseModel):
+    x: Percentage
+    z: Percentage
+
+
 class CommandInput(BaseModel):
-    inputType: Literal["text", "instantCommand"]
-    data: StrictStr
+    inputType: Literal["text", "instantCommand", "point"]
+    data: StrictStr | None = None
+    points: list[PointInput] | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_input(self) -> "CommandInput":
+        if self.inputType == "point":
+            if self.points is None:
+                raise ValueError("Points are required for point input")
+        elif self.data is None:
+            raise ValueError("Data is required for text and instant command input")
+        return self
 
 
 @app.get("/configuration")
@@ -90,6 +130,7 @@ def update_configuration(changes: ConfigurationUpdate) -> Configuration:
 
 
 def extract_command(content: CommandInput) -> str:
+    assert content.data is not None
     with OpenAI(
         base_url=AI_API_URL,
         api_key=os.environ["TEST_KEY"],
@@ -156,9 +197,21 @@ async def status_socket(websocket: WebSocket) -> None:
 
 @app.post("/command")
 async def command(content: CommandInput) -> dict[str, str]:
-    logger.debug("Received %s input (%d characters)", content.inputType, len(content.data))
-    
-    if content.inputType == "instantCommand":
+    logger.debug("Received %s input", content.inputType)
+
+    points = None
+    if content.inputType == "point":
+        assert content.points is not None
+        points = [
+            (
+                X_MIN + point.x * (X_MAX - X_MIN) / 100,
+                Z_MIN + point.z * (Z_MAX - Z_MIN) / 100,
+            )
+            for point in content.points
+        ]
+        extracted = "point"
+    elif content.inputType == "instantCommand":
+        assert content.data is not None
         extracted = content.data.strip().lower()
         if extracted not in COMMANDS:
             logger.warning("Invalid instant command: %s", extracted)
@@ -170,7 +223,10 @@ async def command(content: CommandInput) -> dict[str, str]:
     logger.debug("Extracted command: %s", extracted)
     print(extracted, flush=True)
     try:
-        await execute_command(extracted)
+        if points is None:
+            await execute_command(extracted)
+        else:
+            await execute_command(extracted, points)
     except UnsupportedCommandError as exc:
         logger.warning("Unsupported command: %s", extracted)
         raise HTTPException(status_code=501, detail=str(exc)) from exc
