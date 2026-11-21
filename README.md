@@ -39,6 +39,19 @@ curl -X POST http://127.0.0.1:8000/command \
 Currently only `inputType: "text"` is supported. Image, audio, and video
 inputs are not yet supported and are rejected.
 
+## Web Interface
+
+The web interface files (HTML, CSS, JavaScript) are served from the `/web` endpoint. Access them at:
+
+- **Main Interface**: `http://localhost:8000/web/`
+- **Assets**: 
+  - `http://localhost:8000/web/css.css`
+  - `http://localhost:8000/web/webSpeechAPI.js`
+
+From another device, replace `localhost` with the API machine's IP address.
+Microphone access requires HTTPS or localhost in most browsers. The page's
+command API URL is configurable in its settings.
+
 Browser CORS preflight requests are supported. All origins are allowed by
 default (`CORS_ALLOWED_ORIGINS=*`). To restrict them, set
 `CORS_ALLOWED_ORIGINS` in `.env` to a comma-separated list of exact frontend
@@ -79,4 +92,5 @@ The test sends a real request to the model and can home the connected device.
 To test a different API address, set `HURL_BASE_URL`, for
 example `make test-hurl HURL_BASE_URL=http://127.0.0.1:8001`.
 
-The package source is in `src/input_to_cmd`.
+The FastAPI application is in `src/input_to_cmd/api.py`; the
+`src/input_to_cmd/__main__.py` module starts the server.

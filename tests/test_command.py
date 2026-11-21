@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
-from input_to_cmd.__main__ import EXTRACTION_INSTRUCTIONS, app
+from input_to_cmd.api import EXTRACTION_INSTRUCTIONS, app
 from input_to_cmd.command_dispatcher import UnsupportedCommandError, execute_command
 from input_to_cmd import opc_client
 
@@ -18,7 +18,7 @@ from input_to_cmd import opc_client
 class CommandTests(unittest.TestCase):
     def setUp(self) -> None:
         settings = patch.multiple(
-            "input_to_cmd.__main__",
+            "input_to_cmd.api",
             AI_API_URL="https://ki.mwl.merona.de/v1",
             MODEL="smart-city-fast",
         )
@@ -27,9 +27,22 @@ class CommandTests(unittest.TestCase):
         self.client = TestClient(app, raise_server_exceptions=False)
         self.addCleanup(self.client.close)
 
+    def test_web_page_and_assets_are_served(self):
+        for path, content_type in (
+            ("/web/", "text/html"),
+            ("/web/index.html", "text/html"),
+            ("/web/css.css", "text/css"),
+            ("/web/webSpeechAPI.js", "javascript"),
+        ):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(content_type, response.headers["content-type"])
+                self.assertTrue(response.content)
+
     @patch.dict("os.environ", {"TEST_KEY": "test-key"})
     @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
-    @patch("input_to_cmd.__main__.OpenAI")
+    @patch("input_to_cmd.api.OpenAI")
     @patch("builtins.print")
     def test_home_is_extracted_and_executed(self, mock_print, mock_openai, mock_home):
         client = mock_openai.return_value.__enter__.return_value
@@ -58,7 +71,7 @@ class CommandTests(unittest.TestCase):
 
     @patch.dict("os.environ", {"TEST_KEY": "test-key"})
     @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
-    @patch("input_to_cmd.__main__.OpenAI")
+    @patch("input_to_cmd.api.OpenAI")
     def test_unsupported_ambiguous_and_invalid_commands_are_not_executed(
         self, mock_openai, mock_home
     ):
@@ -80,7 +93,7 @@ class CommandTests(unittest.TestCase):
 
     @patch.dict("os.environ", {"TEST_KEY": "test-key"})
     @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
-    @patch("input_to_cmd.__main__.OpenAI")
+    @patch("input_to_cmd.api.OpenAI")
     def test_opc_failure_is_not_reported_as_success(self, mock_openai, mock_home):
         client = mock_openai.return_value.__enter__.return_value
         client.chat.completions.create.return_value.choices = [
@@ -92,7 +105,7 @@ class CommandTests(unittest.TestCase):
         mock_home.assert_awaited_once()
 
     @patch.dict("os.environ", {"TEST_KEY": "test-key"})
-    @patch("input_to_cmd.__main__.OpenAI")
+    @patch("input_to_cmd.api.OpenAI")
     def test_model_failure_returns_server_error(self, mock_openai):
         client = mock_openai.return_value.__enter__.return_value
         client.chat.completions.create.side_effect = RuntimeError("API failed")
@@ -100,7 +113,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
 
     @patch.dict("os.environ", {"TEST_KEY": "test-key"})
-    @patch("input_to_cmd.__main__.OpenAI")
+    @patch("input_to_cmd.api.OpenAI")
     def test_empty_model_response_returns_server_error(self, mock_openai):
         client = mock_openai.return_value.__enter__.return_value
         client.chat.completions.create.return_value.choices = []
@@ -109,7 +122,7 @@ class CommandTests(unittest.TestCase):
 
     @patch.dict("os.environ", {"TEST_KEY": "test-key"})
     @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
-    @patch("input_to_cmd.__main__.OpenAI")
+    @patch("input_to_cmd.api.OpenAI")
     def test_debug_logging_reports_progress_without_raw_input(self, mock_openai, mock_home):
         client = mock_openai.return_value.__enter__.return_value
         client.chat.completions.create.return_value.choices = [
@@ -126,7 +139,7 @@ class CommandTests(unittest.TestCase):
         self.assertNotIn("private request", output)
         self.assertNotIn("test-key", output)
 
-    @patch("input_to_cmd.__main__.OpenAI")
+    @patch("input_to_cmd.api.OpenAI")
     @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
     def test_invalid_inputs_are_rejected_without_processing(self, mock_home, mock_openai):
         for payload in (
@@ -195,6 +208,14 @@ class OpcClientTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ConfigurationTests(unittest.TestCase):
+    @patch.dict("os.environ", {"TEST_KEY": "test-key"})
+    @patch("input_to_cmd.__main__.uvicorn.run")
+    def test_main_starts_extracted_app(self, mock_run):
+        from input_to_cmd.__main__ import HOST, PORT, main
+
+        main()
+        mock_run.assert_called_once_with(app, host=HOST, port=PORT)
+
     def test_cors_preflight_and_post_response(self):
         env = os.environ.copy()
         env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
@@ -204,7 +225,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 from fastapi.testclient import TestClient
-from input_to_cmd.__main__ import app
+from input_to_cmd.api import app
 
 client = TestClient(app)
 headers = {"Origin": "http://frontend.test:3000", "Access-Control-Request-Method": "POST",
@@ -217,7 +238,7 @@ headers["Access-Control-Request-Headers"] = "x-unapproved"
 denied_header = client.options("/command", headers=headers)
 post = client.post("/command", headers={"Origin": "http://frontend.test:3000"}, json={})
 with patch.dict("os.environ", {"TEST_KEY": "test-key"}), \\
-     patch("input_to_cmd.__main__.OpenAI") as ai, \\
+     patch("input_to_cmd.api.OpenAI") as ai, \\
      patch("input_to_cmd.command_dispatcher.set_home") as home, \\
      patch("builtins.print"):
     ai.return_value.__enter__.return_value.chat.completions.create.return_value.choices = [
@@ -264,9 +285,10 @@ print(json.dumps([allowed.status_code, allowed.headers.get("access-control-allow
         env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
         env["TEST_KEY"] = "test-key"
         script = (
-            "from unittest.mock import patch; import input_to_cmd.__main__ as config; "
-            "patcher = patch.object(config.uvicorn, 'run'); patcher.start(); "
-            "config.main(); config.logger.debug('debug message'); patcher.stop()"
+            "from unittest.mock import patch; import input_to_cmd.__main__ as runner; "
+            "import input_to_cmd.api as config; "
+            "patcher = patch.object(runner.uvicorn, 'run'); patcher.start(); "
+            "runner.main(); config.logger.debug('debug message'); patcher.stop()"
         )
         with tempfile.TemporaryDirectory() as directory:
             for level in ("INFO", "DEBUG"):
@@ -286,7 +308,7 @@ print(json.dumps([allowed.status_code, allowed.headers.get("access-control-allow
             env.pop(name, None)
         env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
         script = (
-            "import json, os; import input_to_cmd.__main__ as config; "
+            "import json, os; import input_to_cmd.api as config; "
             "print(json.dumps([config.HOST, config.PORT, config.MODEL, "
             "config.AI_API_URL, os.environ['TEST_KEY']]))"
         )

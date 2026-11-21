@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="de">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="theme-color" content="#171c22">
+        <title>Lenze / Motion Interface</title>
+        <link rel="stylesheet" href="css.css">
+        <script src="webSpeechAPI.js" defer></script>
+    </head>
+    <body>
+        <header class="app-header">
+            <a class="brand" href="index.html">
+                <span class="brand-mark">L/</span>
+                <span>
+                    lenze
+                    <small>MOTION INTERFACE</small>
+                </span>
+            </a>
+            <span class="event-label">
+                HAMELNHACK
+                <b>2026</b>
+            </span>
+            <span class="connection-badge" id="headerConnection">Lokal · nicht verbunden</span>
+        </header>
+        <div class="app-layout">
+            <nav class="navigation" aria-label="Hauptnavigation">
+                <span class="nav-label">KONSOLE</span>
+                <button class="nav-button active" data-page="control" aria-current="page">
+                    <span>⌖</span>
+                    Steuerung
+                </button>
+                <button class="nav-button" data-page="setup">
+                    <span>⌁</span>
+                    Setup
+                </button>
+                <button class="nav-button" data-page="settings">
+                    <span>☷</span>
+                    Einstellungen
+                </button>
+                <div class="nav-bottom">
+                    <span class="vertical-line"></span>
+                    <span>
+                        SPRACHE
+                        <br>
+                        WIRD BEWEGUNG.
+                    </span>
+                    <small>PROTOTYP / V0.2</small>
+                </div>
+            </nav>
+            <main>
+                <section id="page-control" class="page" aria-labelledby="control-heading">
+                    <div class="page-heading">
+                        <div>
+                            <p class="eyebrow">OPERATOR WORKSPACE</p>
+                            <h1 id="control-heading">
+                                Steuerzentrale
+                                <span>.</span>
+                            </h1>
+                        </div>
+                        <p class="page-description">
+                            Direkte Eingabe. Klare Rückmeldung.
+                            <br>
+                            Ein Arbeitsraum für Sprache und Bewegung.
+                        </p>
+                    </div>
+                    <div class="workspace">
+
+                        <!-- Die Vorschau verändert nur die Zielposition; gesendet wird ausdrücklich per Button. -->
+                        <section class="robot-panel" aria-labelledby="robot-heading">
+                            <div class="panel-header">
+                                <h2 id="robot-heading">
+                                    Arbeitsraum
+                                    <span class="tag">XY / VORSCHAU</span>
+                                </h2>
+                                <button id="focusButton" class="text-button" aria-pressed="false">Ansicht vergrößern ⛶</button>
+                            </div>
+                            <div class="robot-stage" id="robotStage" tabindex="0" role="group" aria-label="Zielposition mit Maus oder Pfeiltasten wählen, durch Klick oder Enter fixieren">
+                                <div class="stage-top">
+                                    <span class="stage-label" id="targetMode">ZIEL WÄHLEN</span>
+                                    <span id="stageHint">Maus bewegen · Klick oder Tippen fixiert</span>
+                                </div>
+                                <svg id="robotDrawing" viewBox="0 0 800 500" role="img" aria-labelledby="robot-title">
+                                    <title id="robot-title">Interaktive schematische Roboterarm-Vorschau</title>
+                                    <defs>
+                                        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+                                            <path d="M40 0H0V40" fill="none" stroke="currentColor" stroke-width="0.7"/>
+                                        </pattern>
+                                    </defs>
+                                    <rect class="grid-layer" width="800" height="500" fill="url(#grid)"/>
+                                    <circle class="reach-ring" cx="170" cy="420" r="300"/>
+                                    <circle class="reach-ring" cx="170" cy="420" r="440"/>
+                                    <path class="base-line" d="M75 448H265M170 420V450"/>
+
+                                    <!-- Der transparente Arm erscheint erst bei gültiger Telemetrie. -->
+                                    <g id="actualArm" class="actual-arm" visibility="hidden">
+                                        <path id="actualPath"/>
+                                        <circle id="actualJoint" r="21"/>
+                                        <circle id="actualTip" r="12"/>
+                                    </g>
+                                    <g class="virtual-arm">
+                                        <path id="armShadow" class="arm-shadow"/>
+                                        <path id="armPath"/>
+                                        <circle class="base-joint" cx="170" cy="420" r="27"/>
+                                        <circle id="armJoint" r="24"/>
+                                        <circle id="armTip" r="14"/>
+                                    </g>
+                                    <g id="targetMarker" class="target-marker">
+                                        <circle r="31"/>
+                                        <path d="M-42 0H-22M22 0H42M0-42V-22M0 22V42"/>
+                                        <path id="gripperDrawing" d="M-10-8V9L-5 15M10-8V9L5 15"/>
+                                    </g>
+                                    <text class="axis-label" x="27" y="470">Y ↑</text>
+                                    <text class="axis-label" x="725" y="470">X →</text>
+                                </svg>
+                                <div class="stage-bottom">
+                                    <span>
+                                        <i class="swatch target-swatch"></i>
+                                        Zielarm
+                                    </span>
+                                    <span>
+                                        <i class="swatch actual-swatch"></i>
+                                        Phantom / Ist-Arm
+                                        <b id="telemetryLabel">· keine Daten</b>
+                                    </span>
+                                    <span class="stage-scale">SCHEMATISCHE ANSICHT</span>
+                                </div>
+                            </div>
+                            <div class="position-strip">
+                                <div>
+                                    <span class="eyebrow">ZIELPOSITION</span>
+                                    <div class="coordinates">
+                                        <span>
+                                            X
+                                            <output id="coordX">240</output>
+                                        </span>
+                                        <span>
+                                            Y
+                                            <output id="coordY">125</output>
+                                        </span>
+                                        <span>
+                                            Z
+                                            <output id="coordZ">180</output>
+                                        </span>
+                                        <small id="unitLabel">mm</small>
+                                    </div>
+                                </div>
+                                <button id="gripperButton" class="gripper-button" aria-pressed="false">
+                                    Greifer
+                                    <b id="gripperState">offen</b>
+                                </button>
+                            </div>
+                            <div class="robot-tools">
+                                <label for="heightControl">
+                                    Höhe Z
+                                    <span>mm</span>
+                                </label>
+                                <input id="heightControl" type="range" min="0" max="400" value="180">
+                                <button id="unlockTargetButton" class="secondary-button" disabled>Ziel bearbeiten</button>
+                                <button id="homeButton" class="secondary-button">Ziel zurücksetzen</button>
+                                <button id="sendTargetButton" class="primary-button" disabled>Ziel übertragen</button>
+                            </div>
+                            <p id="targetStatus" class="panel-note" role="status">Nur lokale Vorschau. Keine Roboterverbindung.</p>
+                        </section>
+
+                        <!-- Jeder neue Erkennungsstand wird als transcript:update-Event bereitgestellt. -->
+                        <section class="speech-panel" aria-labelledby="voice-heading">
+                            <div class="panel-header">
+                                <h2 id="voice-heading">Spracheingabe</h2>
+                                <span id="recordingBadge" class="tag">BEREIT</span>
+                            </div>
+                            <div class="speech-body">
+                                <div class="voice-intro">
+                                    <span class="voice-icon" aria-hidden="true">◉</span>
+                                    <div>
+                                        <p class="eyebrow">LIVE TRANSKRIPTION</p>
+                                        <h3>Einfach aussprechen.</h3>
+                                    </div>
+                                </div>
+                                <p id="recordingStatus" class="recording-status" role="status">Bereit für deine Aufnahme.</p>
+                                <div class="record-controls">
+                                    <button id="startButton" class="primary-button">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                                            <rect x="9" y="3" width="6" height="12" rx="3"/>
+                                            <path d="M6 10v2a6 6 0 0 0 12 0v-2M12 18v3m-4 0h8"/>
+                                        </svg>
+                                        Aufnahme starten
+                                    </button>
+                                    <button id="stopButton" class="secondary-button" disabled>Stop</button>
+                                </div>
+                                <div class="transcript-label">
+                                    <label for="log">Transkript</label>
+                                    <span id="transcriptCount">0 Zeichen</span>
+                                </div>
+                                <textarea id="log" rows="7" placeholder="Befehl eingeben oder Aufnahme starten …"></textarea>
+                                <div class="manual-command">
+                                    <button id="manualSendButton" class="primary-button" disabled>Text an API senden</button>
+                                    <p>Sendet den gesamten Feldinhalt. Auch mit Strg+Enter. Während der Aufnahme ist das Feld schreibgeschützt.</p>
+                                </div>
+                                <div class="transcript-actions">
+                                    <button id="copyButton" class="text-button">Kopieren</button>
+                                    <button id="downloadButton" class="text-button">Als Text laden</button>
+                                    <button id="clearButton" class="text-button">Leeren</button>
+                                </div>
+                                <div class="stream-card">
+                                    <div>
+                                        <span class="stream-icon">≋</span>
+                                        <div>
+                                            <strong>Textstream</strong>
+                                            <span id="streamStatus">Browser-Events aktiv</span>
+                                        </div>
+                                        <output id="streamCount">000</output>
+                                    </div>
+                                    <p>Die Command-API erhält nur endgültige Sprachsegmente oder den ausdrücklich gesendeten Eingabetext. Zwischenstände bleiben lokal sichtbar.</p>
+                                </div>
+                                <p class="privacy-note">Spracherkennung über den Browser; Audiodaten können an dessen Erkennungsdienst gesendet werden. Mikrofonzugriff benötigt HTTPS oder localhost.</p>
+                            </div>
+                        </section>
+                    </div>
+                    <details id="apiLogPanel" class="api-log-panel" open>
+                        <summary>API-Log <span id="apiLogSummary" role="status">Noch keine Anfragen</span></summary>
+                        <div class="api-log-content">
+                            <p>Lokales Sitzungslog: Herkunft der Website, Zieladresse, JSON, Status und Antwort. „POST angefordert“ bestätigt noch keinen Eingang am Server; der Browser kann zuvor eine OPTIONS-Prüfung senden. Keys werden ausgeblendet. Eine HTTP-Bestätigung ist keine Bestätigung der Roboterbewegung.</p>
+                            <label for="apiLog">Anfragen und Antworten</label>
+                            <textarea id="apiLog" rows="12" readonly spellcheck="false" placeholder="API-Ereignisse erscheinen hier …"></textarea>
+                            <div class="button-row">
+                                <button id="copyApiLog" class="secondary-button">Log kopieren</button>
+                                <button id="clearApiLog" class="secondary-button">Log leeren</button>
+                            </div>
+                        </div>
+                    </details>
+                    <div class="activity-bar">
+                        <span id="workspaceName">LENZE / ROBOTER 01</span>
+                        <span>KI-Übersetzung &amp; Backend in Vorbereitung</span>
+                        <span class="activity-indicator">FRONTEND BEREIT</span>
+                    </div>
+                </section>
+                <section id="page-setup" class="page" aria-labelledby="setup-heading" hidden>
+                    <div class="page-heading">
+                        <div>
+                            <p class="eyebrow">VERBINDUNG &amp; ARBEITSRAUM</p>
+                            <h1 id="setup-heading">
+                                System einrichten
+                                <span>.</span>
+                            </h1>
+                        </div>
+                        <p class="page-description">
+                            Lokal arbeiten.
+                            <br>
+                            Backend anschließen, sobald es bereit ist.
+                        </p>
+                    </div>
+                    <div class="setup-grid">
+                        <section class="card">
+                            <p class="eyebrow">TRANSPORT</p>
+                            <h2>Backend-Verbindung</h2>
+                            <p>HTTP-API für den Transkript-Stream. Der WebSocket darunter bleibt für Roboterkoordinaten und Ziele verfügbar.</p>
+                            <label for="robotName">Systemname</label>
+                            <input id="robotName" maxlength="60" value="Lenze / Roboter 01">
+                            <label for="apiUrl">Transkript-API (HTTP POST)</label>
+                            <input id="apiUrl" type="url" value="http://192.168.5.204:8000/command" placeholder="http://192.168.5.204:8000/command">
+                            <label for="apiKey">API-Key (optional, nur für diese Sitzung)</label>
+                            <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Key später eintragen">
+                            <label class="check-row">
+                                <input id="forwardApi" type="checkbox" checked>
+                                <span>Abgeschlossene Sprachsegmente an die Command-API senden</span>
+                            </label>
+                            <p id="apiStatus" class="field-note" role="status">Command-API vorbereitet.</p>
+                            <p class="field-note">Key wird nicht gespeichert. Dauerhafte Anbieter-Keys gehören ins Backend. Die API muss Browserzugriffe (CORS) und bei Key-Nutzung den Authorization-Header erlauben.</p>
+                            <label for="endpoint">Roboter-WebSocket-Adresse</label>
+                            <input id="endpoint" type="url" placeholder="ws://localhost:8080">
+                            <div class="button-row">
+                                <button id="connectButton" class="primary-button">Verbinden</button>
+                                <button id="disconnectButton" class="secondary-button" disabled>Trennen</button>
+                            </div>
+                            <p id="connectionStatus" class="field-note" role="status">Nicht verbunden. Text bleibt lokal verfügbar.</p>
+                            <label class="check-row">
+                                <input id="forwardTranscript" type="checkbox">
+                                <span>Transkripte zusätzlich über WebSocket senden</span>
+                            </label>
+                            <p class="field-note">Keine automatische Bewegung aus Sprache. Ziele werden nur über „Ziel übertragen“ gesendet.</p>
+                        </section>
+                        <section class="card">
+                            <p class="eyebrow">KOORDINATEN</p>
+                            <h2>Arbeitsraum</h2>
+                            <p>Vorschaugrenzen und übertragene Ziele in Millimetern.</p>
+                            <div class="field-grid">
+                                <div>
+                                    <label for="limitX">X maximal</label>
+                                    <input id="limitX" type="number" min="1" max="10000" value="500" required>
+                                </div>
+                                <div>
+                                    <label for="limitY">Y maximal</label>
+                                    <input id="limitY" type="number" min="1" max="10000" value="500" required>
+                                </div>
+                                <div>
+                                    <label for="limitZ">Z maximal</label>
+                                    <input id="limitZ" type="number" min="1" max="10000" value="400" required>
+                                </div>
+                            </div>
+                            <label for="language">Erkennungssprache</label>
+                            <select id="language">
+                                <option value="de-DE">Deutsch · de-DE</option>
+                                <option value="en-US">English · en-US</option>
+                            </select>
+                            <p class="field-note">Die Sprache lässt sich bei gestoppter Aufnahme ändern. Die Arbeitsraumgrenzen ersetzen keine Kalibrierung am Roboter.</p>
+                        </section>
+                    </div>
+
+                    <!-- Vorläufiger Adaptervertrag, bis das echte Backend-Format feststeht. -->
+                    <details class="protocol-card">
+                        <summary>API- und Stream-Schnittstelle / vorläufiges Format</summary>
+                        <div class="protocol-content">
+                            <p>Command-API: <code>POST http://192.168.5.204:8000/command</code> mit <code>{"inputType":"text","data":"Dein Befehl"}</code>. Nur endgültige Sprachsegmente und manuell gesendete Texte werden übertragen. Browser-Events behalten das unten gezeigte Stream-Format. Requests werden nacheinander verarbeitet.</p>
+                            <p>Bei Netzwerkfehlern wird die API-Weiterleitung pausiert. Nicht bestätigte Nachrichten werden nicht automatisch wiederholt. Die API muss eine erfolgreiche Verarbeitung mit einem 2xx-Status bestätigen. Ein optionales Telemetrie-JSON in der Antwort aktualisiert den Phantomarm.</p>
+                            <p>
+                                Im Browser:
+                                <code>window.addEventListener("transcript:update", event =&gt; console.log(event.detail))</code>
+                            </p>
+                            <p>
+                                Ein Segment behält seine ID während der Überarbeitung.
+                                <code>text</code>
+                                ersetzt den bisherigen Segmenttext.
+                                <code>isFinal</code>
+                                markiert den Abschluss.
+                                <code>fullText</code>
+                                ist der aktuelle Gesamttext. Zwischenstände nicht einfach aneinanderhängen.
+                            </p>
+                            <pre>{"type":"transcript","sessionId":"…","segmentId":"…:0","sequence":1,
+ "text":"Bewege den Arm","isFinal":false,"fullText":"Bewege den Arm",
+ "language":"de-DE","timestamp":"…"}</pre>
+                            <p>
+                                Abschluss einer Aufnahme:
+                                <code>{"type":"transcript.end","sessionId":"…","sequence":2,"reason":"stopped"}</code>
+                                . Abbruch oder Fehler schließt vorläufige Segmente nicht als endgültig ab. Nicht verbundene Nachrichten werden nicht nachträglich gesendet.
+                            </p>
+                            <p>
+                                Zielausgabe:
+                                <code>{"type":"target","position":{"x":240,"y":125,"z":180},"gripper":"open","units":"mm"}</code>
+                            </p>
+                            <p>
+                                Ist-Position empfangen:
+                                <code>{"type":"telemetry","position":{"x":230,"y":120,"z":175},"units":"mm"}</code>
+                                . Ohne WebSocket kann ein Adapter dieselben Daten über
+                                <code>window.motionInterface.updateTelemetry(message)</code>
+                                einspielen.
+                            </p>
+                            <p>API-Anfragen und Antworten stehen im Logfenster der Steuerungsansicht. Bei HTTPS-Seiten ist die HTTP-API durch Mixed Content blockiert; localhost oder einen HTTPS-Proxy verwenden.</p>
+                        </div>
+                    </details>
+                </section>
+                <section id="page-settings" class="page" aria-labelledby="settings-heading" hidden>
+                    <div class="page-heading">
+                        <div>
+                            <p class="eyebrow">DEIN ARBEITSPLATZ</p>
+                            <h1 id="settings-heading">
+                                Ansicht anpassen
+                                <span>.</span>
+                            </h1>
+                        </div>
+                        <p class="page-description">
+                            Einstellungen werden auf
+                            <br>
+                            diesem Gerät gespeichert.
+                        </p>
+                    </div>
+                    <div class="setup-grid">
+                        <section class="card">
+                            <p class="eyebrow">DARSTELLUNG</p>
+                            <h2>Arbeitsraum-Ansicht</h2>
+                            <label class="check-row">
+                                <input id="showGrid" type="checkbox" checked>
+                                <span>Koordinatenraster anzeigen</span>
+                            </label>
+                            <label class="check-row">
+                                <input id="showActual" type="checkbox" checked>
+                                <span>Phantomarm bei verfügbarer Telemetrie anzeigen</span>
+                            </label>
+                            <label for="actualOpacity">Deckkraft des Phantomarms</label>
+                            <input id="actualOpacity" type="range" min="10" max="80" value="30">
+                            <label for="units">Anzeigeeinheit</label>
+                            <select id="units">
+                                <option value="mm">Millimeter · mm</option>
+                                <option value="cm">Zentimeter · cm</option>
+                            </select>
+                        </section>
+                        <section class="card">
+                            <p class="eyebrow">TRANSKRIPTION</p>
+                            <h2>Stream-Verhalten</h2>
+                            <label class="check-row">
+                                <input id="sendInterim" type="checkbox" checked>
+                                <span>Auch Zwischenstände an den Stream ausgeben</span>
+                            </label>
+                            <p>Das Transkript zeigt Zwischenstände immer an. Dies betrifft Browser-Events und den optionalen WebSocket. Die Command-API erhält keine Zwischenstände.</p>
+                            <label class="check-row">
+                                <input id="autoRestart" type="checkbox" checked>
+                                <span>Nach automatischem Browser-Stopp weiter aufnehmen</span>
+                            </label>
+                            <p>Kein automatischer Neustart nach Stop, Tab-Wechsel im Browser oder Aufnahmefehler.</p>
+                            <button id="resetSettings" class="secondary-button">Einstellungen zurücksetzen</button>
+                            <p class="field-note">Das Transkript wird nicht dauerhaft gespeichert.</p>
+                        </section>
+                    </div>
+                </section>
+                <p id="appNotice" class="app-notice" role="status"></p>
+                <noscript>Bitte aktiviere JavaScript für Navigation, Vorschau und Spracherkennung.</noscript>
+            </main>
+        </div>
+    </body>
+</html>
