@@ -70,25 +70,40 @@ class CommandTests(unittest.TestCase):
         mock_print.assert_called_once_with("home", flush=True)
 
     @patch.dict("os.environ", {"TEST_KEY": "test-key"})
-    @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
+    @patch("input_to_cmd.command_dispatcher.stop", new_callable=AsyncMock)
+    @patch("input_to_cmd.command_dispatcher.move", new_callable=AsyncMock)
     @patch("input_to_cmd.api.OpenAI")
-    def test_unsupported_ambiguous_and_invalid_commands_are_not_executed(
-        self, mock_openai, mock_home
+    def test_move_down_and_stop_are_extracted_and_executed(
+        self, mock_openai, mock_move, mock_stop
     ):
         client = mock_openai.return_value.__enter__.return_value
-        for result, status in (
-            ("move right", 501), ("move up", 501), ("move left", 501), ("stop", 501),
-            ("NONE", 422), ("move right and move left", 502),
-        ):
+        for result in ("move_down", "stop"):
             with self.subTest(result=result):
                 client.chat.completions.create.return_value.choices = [
                     SimpleNamespace(message=SimpleNamespace(content=result))
                 ]
-                text = "Stop the robot" if result == "stop" else "My request"
-                response = self.client.post("/command", json={"inputType": "text", "data": text})
+                response = self.client.post(
+                    "/command", json={"inputType": "text", "data": result}
+                )
+                self.assertEqual(response.status_code, 200)
+        mock_move.assert_awaited_once_with("move_down")
+        mock_stop.assert_awaited_once_with()
+        self.assertIn("move_down", EXTRACTION_INSTRUCTIONS)
+
+    @patch.dict("os.environ", {"TEST_KEY": "test-key"})
+    @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
+    @patch("input_to_cmd.api.OpenAI")
+    def test_ambiguous_and_invalid_commands_are_not_executed(self, mock_openai, mock_home):
+        client = mock_openai.return_value.__enter__.return_value
+        for result, status in (("NONE", 422), ("move_right and move_left", 502)):
+            with self.subTest(result=result):
+                client.chat.completions.create.return_value.choices = [
+                    SimpleNamespace(message=SimpleNamespace(content=result))
+                ]
+                response = self.client.post(
+                    "/command", json={"inputType": "text", "data": "My request"}
+                )
                 self.assertEqual(response.status_code, status)
-                if result == "stop":
-                    self.assertIn("stop", EXTRACTION_INSTRUCTIONS)
                 mock_home.assert_not_awaited()
 
     @patch.dict("os.environ", {"TEST_KEY": "test-key"})
@@ -169,6 +184,17 @@ class DispatcherTests(unittest.IsolatedAsyncioTestCase):
             await execute_command("unknown")
         mock_home.assert_not_awaited()
 
+    @patch("input_to_cmd.command_dispatcher.stop", new_callable=AsyncMock)
+    @patch("input_to_cmd.command_dispatcher.move", new_callable=AsyncMock)
+    async def test_dispatcher_routes_movement_and_stop(self, move, stop):
+        for command in ("move_left", "move_right", "move_down", "move_up"):
+            await execute_command(command)
+        await execute_command("stop")
+        self.assertEqual([call.args for call in move.await_args_list], [
+            ("move_left",), ("move_right",), ("move_down",), ("move_up",),
+        ])
+        stop.assert_awaited_once_with()
+
 
 class OpcClientTests(unittest.IsolatedAsyncioTestCase):
     @patch("input_to_cmd.opc_client.asyncio.sleep", new_callable=AsyncMock)
@@ -205,6 +231,74 @@ class OpcClientTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "read failed"):
                 await opc_client.set_home()
         self.assertEqual([call.args for call in home.write_value.await_args_list], [(True,), (False,)])
+
+    @patch("input_to_cmd.opc_client.asyncio.sleep", new_callable=AsyncMock)
+    @patch("input_to_cmd.opc_client.create_client")
+    async def test_move_runs_until_limit_then_resets(self, create_client, sleep):
+        jog, position = MagicMock(), MagicMock()
+        jog.write_value = AsyncMock()
+        position.read_value = AsyncMock(side_effect=[20.0, 16.0])
+        client = create_client.return_value.__aenter__.return_value
+        client.get_node = MagicMock(side_effect=lambda node: {
+            opc_client.X_JOG_NEG_NODE_ID: jog,
+            opc_client.X_POSITION_NODE_ID: position,
+        }[node])
+        await opc_client.move("move_left")
+        self.assertEqual([call.args for call in jog.write_value.await_args_list], [
+            (True,), (False,),
+        ])
+        self.assertEqual(position.read_value.await_count, 2)
+        sleep.assert_not_awaited()
+
+    @patch("input_to_cmd.opc_client.create_client")
+    async def test_move_does_not_start_at_limit(self, create_client):
+        jog, position = MagicMock(), MagicMock()
+        jog.write_value = AsyncMock()
+        position.read_value = AsyncMock(return_value=155.0)
+        client = create_client.return_value.__aenter__.return_value
+        client.get_node = MagicMock(side_effect=lambda node: {
+            opc_client.Z_JOG_POS_NODE_ID: jog,
+            opc_client.Z_POSITION_NODE_ID: position,
+        }[node])
+        await opc_client.move("move_up")
+        jog.write_value.assert_awaited_once_with(False)
+        position.read_value.assert_awaited_once_with()
+
+    @patch("input_to_cmd.opc_client.create_client")
+    async def test_stop_clears_all_jog_nodes(self, create_client):
+        jog_nodes = {node: MagicMock() for node in (
+            opc_client.X_JOG_NEG_NODE_ID,
+            opc_client.X_JOG_POS_NODE_ID,
+            opc_client.Z_JOG_NEG_NODE_ID,
+            opc_client.Z_JOG_POS_NODE_ID,
+        )}
+        for node in jog_nodes.values():
+            node.write_value = AsyncMock()
+        client = create_client.return_value.__aenter__.return_value
+        client.get_node = MagicMock(side_effect=jog_nodes.__getitem__)
+        await opc_client.stop()
+        for node in jog_nodes.values():
+            node.write_value.assert_awaited_once_with(False)
+
+    @patch("input_to_cmd.opc_client.create_client")
+    async def test_stop_attempts_every_node_when_a_write_fails(self, create_client):
+        error = RuntimeError("write failed")
+        jog_nodes = {node: MagicMock() for node in (
+            opc_client.X_JOG_NEG_NODE_ID,
+            opc_client.X_JOG_POS_NODE_ID,
+            opc_client.Z_JOG_NEG_NODE_ID,
+            opc_client.Z_JOG_POS_NODE_ID,
+        )}
+        for node in jog_nodes.values():
+            node.write_value = AsyncMock()
+        jog_nodes[opc_client.X_JOG_NEG_NODE_ID].write_value.side_effect = error
+        client = create_client.return_value.__aenter__.return_value
+        client.get_node = MagicMock(side_effect=jog_nodes.__getitem__)
+        with self.assertLogs("input_to_cmd.opc_client", level="ERROR"):
+            with self.assertRaisesRegex(RuntimeError, "write failed"):
+                await opc_client.stop()
+        for node in jog_nodes.values():
+            node.write_value.assert_awaited_once_with(False)
 
 
 class ConfigurationTests(unittest.TestCase):

@@ -39,10 +39,10 @@ app.mount("/web", StaticFiles(directory=web_dir, html=True), name="web")
 logger = logging.getLogger("input_to_cmd")
 logger.setLevel(LOG_LEVEL)
 
-COMMANDS = {"home", "move right", "move up", "move left", "stop"}
+COMMANDS = {"home", "move_right", "move_up", "move_left", "move_down", "stop"}
 EXTRACTION_INSTRUCTIONS = (
     "Extract exactly one command from the user's input. "
-    "The only valid commands are: home, move right, move up, move left, stop. "
+    "The only valid commands are: home, move_right, move_up, move_left, move_down, stop. "
     "Return only the exact command in lowercase, with no other text. "
     "If the input does not clearly specify exactly one command, return NONE."
 )
