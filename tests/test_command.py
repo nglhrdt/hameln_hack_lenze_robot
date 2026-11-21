@@ -14,7 +14,7 @@ from httpx import ASGITransport, AsyncClient
 
 from input_to_cmd.api import EXTRACTION_INSTRUCTIONS, app
 from input_to_cmd.command_dispatcher import UnsupportedCommandError, execute_command
-from input_to_cmd import opc_client
+from input_to_cmd import command_dispatcher, opc_client
 
 
 class CommandTests(unittest.TestCase):
@@ -196,6 +196,87 @@ class DispatcherTests(unittest.IsolatedAsyncioTestCase):
             ("move_left",), ("move_right",), ("move_down",), ("move_up",),
         ])
         stop.assert_awaited_once_with()
+
+    @patch("input_to_cmd.command_dispatcher.get_running_movement", return_value="move_up")
+    @patch("input_to_cmd.command_dispatcher.set_home")
+    async def test_home_is_reported_until_it_finishes_or_fails(self, home, movement):
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def run_home():
+            started.set()
+            await release.wait()
+            raise RuntimeError("home failed")
+
+        home.side_effect = run_home
+        task = asyncio.create_task(execute_command("home"))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        self.assertEqual(command_dispatcher.get_running_command(), "home")
+        release.set()
+        with self.assertRaisesRegex(RuntimeError, "home failed"):
+            await task
+        self.assertEqual(command_dispatcher.get_running_command(), "move_up")
+
+    @patch("input_to_cmd.command_dispatcher.get_running_movement", return_value=None)
+    @patch("input_to_cmd.command_dispatcher.stop")
+    async def test_stop_is_reported_while_in_progress(self, stop, movement):
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def run_stop():
+            started.set()
+            await release.wait()
+
+        stop.side_effect = run_stop
+        task = asyncio.create_task(execute_command("stop"))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        self.assertEqual(command_dispatcher.get_running_command(), "stop")
+        release.set()
+        await task
+        self.assertIsNone(command_dispatcher.get_running_command())
+
+
+class StatusSocketTests(unittest.TestCase):
+    @patch("input_to_cmd.api.STATUS_POLL_INTERVAL_SECONDS", 0.01)
+    @patch("input_to_cmd.api.get_running_command", side_effect=["move_left", None])
+    @patch("input_to_cmd.api.get_position", new_callable=AsyncMock)
+    def test_sends_updated_position_and_command(self, position, command):
+        position.side_effect = [(20.0, 30.0), (16.0, 31.0)]
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws/status") as socket:
+                self.assertEqual(socket.receive_json(), {
+                    "command": "move_left", "position": {"x": 20.0, "z": 30.0}, "error": None,
+                })
+                self.assertEqual(socket.receive_json(), {
+                    "command": None, "position": {"x": 16.0, "z": 31.0}, "error": None,
+                })
+
+    @patch("input_to_cmd.api.STATUS_POLL_INTERVAL_SECONDS", 0.01)
+    @patch("input_to_cmd.api.get_running_command", return_value=None)
+    @patch("input_to_cmd.api.get_position", new_callable=AsyncMock)
+    def test_reports_position_failure_and_recovers(self, position, command):
+        position.side_effect = [ConnectionError("OPC unavailable"), (1.0, 2.0)]
+        with self.assertLogs("input_to_cmd", level="ERROR"):
+            with TestClient(app) as client:
+                with client.websocket_connect("/ws/status") as socket:
+                    self.assertEqual(socket.receive_json(), {
+                        "command": None, "position": None, "error": "Position unavailable",
+                    })
+                    self.assertEqual(socket.receive_json(), {
+                        "command": None, "position": {"x": 1.0, "z": 2.0}, "error": None,
+                    })
+
+    @patch("input_to_cmd.api.CORS_ALLOWED_ORIGINS", ["https://allowed.example"])
+    def test_rejects_disallowed_browser_origin(self):
+        from starlette.websockets import WebSocketDisconnect
+
+        with TestClient(app) as client:
+            with self.assertRaises(WebSocketDisconnect) as error:
+                with client.websocket_connect(
+                    "/ws/status", headers={"origin": "https://other.example"}
+                ):
+                    pass
+        self.assertEqual(error.exception.code, 1008)
 
 
 class OpcClientTests(unittest.IsolatedAsyncioTestCase):

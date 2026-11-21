@@ -55,6 +55,17 @@ command API URL is configurable in its settings.
 Use the arrow keys for movement, `H` for home, and `S` for stop. Releasing a
 movement key does not stop the robot; use the stop control.
 
+The page connects to `/ws/status` on the same host. The server samples X and Z
+positions approximately once per second per connected client and sends JSON
+such as `{"command":"move_left","position":{"x":123.4,"z":56.7},"error":null}`.
+The command is `null` when no command is running; an in-progress home or stop
+takes precedence over movement. Failed position reads are logged and sent as
+`"position":null` with an error message. The UI clears stale status on
+disconnect and reconnects automatically. The displayed command reflects this
+process's command tracking, not an independent hardware safety indication.
+WebSocket browser origins follow `CORS_ALLOWED_ORIGINS`; as with HTTP, this
+is not authentication.
+
 Browser CORS preflight requests are supported. All origins are allowed by
 default (`CORS_ALLOWED_ORIGINS=*`). To restrict them, set
 `CORS_ALLOWED_ORIGINS` in `.env` to a comma-separated list of exact frontend

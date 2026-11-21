@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lenze Robot Control</title>
+    <link rel="icon" href="./favicon.ico" type="image/x-icon">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@6.0.0-alpha.1/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-B/GM4XqrwHnWXNOWMbloTmrYXZg10cakYGmpfsR/bbzQ6JAJI4ihuyADKLnBgrCe" crossorigin="anonymous">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
     <style>
@@ -24,6 +25,9 @@
         }
         .btn.loading {
             pointer-events: none;
+        }
+        .btn.command-active {
+            box-shadow: 0 0 0 4px #ffc107;
         }
         .image-marquee {
             position: fixed;
@@ -90,6 +94,8 @@
                         <div></div>
                     </div>
                 </div>
+                <p class="text-center mt-3 mb-0" id="position">X: -- | Z: --</p>
+                <p class="text-center text-muted small mb-0" id="status">Verbindung wird hergestellt...</p>
             </div>
         </div>
         <div class="card-footer text-muted d-flex justify-content-between align-items-center">
@@ -178,6 +184,55 @@
                     document.querySelector(`[data-command="${command}"]`).click();
                 }
             });
+
+            const position = document.getElementById("position");
+            const status = document.getElementById("status");
+            const buttons = document.querySelectorAll("[data-command]");
+
+            function clearStatus(message) {
+                buttons.forEach(button => button.classList.remove("command-active"));
+                position.textContent = "X: -- | Z: --";
+                status.textContent = message;
+            }
+
+            function connectStatus() {
+                if (!["http:", "https:"].includes(window.location.protocol)) {
+                    clearStatus("Status nur über den Webserver verfügbar.");
+                    return;
+                }
+                const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+                const socket = new WebSocket(`${protocol}//${window.location.host}/ws/status`);
+
+                socket.addEventListener("message", function(event) {
+                    let state;
+                    try {
+                        state = JSON.parse(event.data);
+                    } catch (error) {
+                        console.error("Invalid status message", error);
+                        clearStatus("Ungültige Statusmeldung.");
+                        return;
+                    }
+                    buttons.forEach(button => {
+                        button.classList.toggle("command-active", button.dataset.command === state.command);
+                    });
+                    if (state.position && Number.isFinite(state.position.x) && Number.isFinite(state.position.z)) {
+                        position.textContent = `X: ${state.position.x.toFixed(2)} | Z: ${state.position.z.toFixed(2)}`;
+                        status.textContent = "";
+                    } else {
+                        position.textContent = "X: -- | Z: --";
+                        status.textContent = "Position nicht verfügbar.";
+                    }
+                });
+                socket.addEventListener("error", function() {
+                    console.error("Status WebSocket connection failed");
+                });
+                socket.addEventListener("close", function() {
+                    clearStatus("Statusverbindung getrennt. Erneuter Verbindungsversuch...");
+                    setTimeout(connectStatus, 2000);
+                });
+            }
+
+            connectStatus();
         });
     </script>
 </body>

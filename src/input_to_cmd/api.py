@@ -1,19 +1,21 @@
+import asyncio
 import logging
+import math
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from pydantic import BaseModel, StrictStr
 from starlette.concurrency import run_in_threadpool
 
-from .command_dispatcher import UnsupportedCommandError, execute_command
-from .opc_client import shutdown_movement
+from .command_dispatcher import UnsupportedCommandError, execute_command, get_running_command
+from .opc_client import get_position, shutdown_movement
 
 load_dotenv(".env")
 
@@ -49,6 +51,8 @@ app.mount("/web", StaticFiles(directory=web_dir, html=True), name="web")
 logger = logging.getLogger("input_to_cmd")
 logger.setLevel(LOG_LEVEL)
 
+STATUS_POLL_INTERVAL_SECONDS = 1.0
+POSITION_TIMEOUT_SECONDS = 2.0
 COMMANDS = {"home", "move_right", "move_up", "move_left", "move_down", "stop"}
 EXTRACTION_INSTRUCTIONS = (
     "Extract exactly one command from the user's input. "
@@ -88,6 +92,44 @@ def extract_command(content: CommandInput) -> str:
         logger.warning("Model returned an invalid command")
         raise HTTPException(status_code=502, detail="The model returned an invalid command.")
     return extracted
+
+
+@app.websocket("/ws/status")
+async def status_socket(websocket: WebSocket) -> None:
+    origin = websocket.headers.get("origin")
+    if origin and "*" not in CORS_ALLOWED_ORIGINS and origin not in CORS_ALLOWED_ORIGINS:
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept()
+    try:
+        while True:
+            try:
+                x, z = await asyncio.wait_for(get_position(), timeout=POSITION_TIMEOUT_SECONDS)
+                if not math.isfinite(x) or not math.isfinite(z):
+                    raise ValueError("OPC position is not finite")
+                position = {"x": x, "z": z}
+                error = None
+            except Exception:
+                logger.exception("Could not read OPC position for status socket")
+                position = None
+                error = "Position unavailable"
+
+            await websocket.send_json({
+                "command": get_running_command(),
+                "position": position,
+                "error": error,
+            })
+            try:
+                message = await asyncio.wait_for(
+                    websocket.receive(), timeout=STATUS_POLL_INTERVAL_SECONDS
+                )
+                if message["type"] == "websocket.disconnect":
+                    break
+            except asyncio.TimeoutError:
+                pass
+    except (WebSocketDisconnect, OSError):
+        logger.debug("Status socket disconnected")
 
 
 @app.post("/command")
