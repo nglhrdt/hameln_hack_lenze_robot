@@ -1,5 +1,7 @@
 import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from operator import ge, le
 from typing import Callable
 
@@ -32,12 +34,68 @@ _movement_task: asyncio.Task[None] | None = None
 _movement_command: str | None = None
 _movement_lock: asyncio.Lock | None = None
 _movement_loop: asyncio.AbstractEventLoop | None = None
+_client_context: Client | None = None
+_client: Client | None = None
+_connection_lock: asyncio.Lock | None = None
+_connection_loop: asyncio.AbstractEventLoop | None = None
 
 
 def create_client() -> Client:
     client = Client(url=OPC_URL)
     client.session_timeout = SESSION_TIMEOUT_MS
     return client
+
+
+def _get_connection_lock() -> asyncio.Lock:
+    global _connection_lock, _connection_loop
+    loop = asyncio.get_running_loop()
+    if _connection_loop is not loop:
+        if _client_context is not None:
+            raise RuntimeError("OPC connection belongs to another event loop")
+        _connection_lock = asyncio.Lock()
+        _connection_loop = loop
+    assert _connection_lock is not None
+    return _connection_lock
+
+
+@asynccontextmanager
+async def connection() -> AsyncIterator[Client]:
+    global _client_context, _client
+    async with _get_connection_lock():
+        if _client is None:
+            if _client_context is not None:
+                raise RuntimeError("Previous OPC connection has not been closed")
+            _client_context = create_client()
+            try:
+                _client = await _client_context.__aenter__()
+            except BaseException:
+                try:
+                    await _client_context.__aexit__(None, None, None)
+                except BaseException:
+                    logger.exception("Failed to clean up OPC connection")
+                    raise
+                else:
+                    _client_context = None
+                raise
+        client = _client
+    yield client
+
+
+async def shutdown_connection() -> None:
+    global _client_context, _client
+    try:
+        await shutdown_movement()
+    finally:
+        async with _get_connection_lock():
+            if _client_context is not None:
+                try:
+                    await _client_context.__aexit__(None, None, None)
+                except BaseException:
+                    logger.exception("Failed to close OPC connection")
+                    raise
+                else:
+                    _client_context = None
+                    _client = None
 
 
 def get_running_command() -> str | None:
@@ -47,7 +105,7 @@ def get_running_command() -> str | None:
 
 
 async def get_position() -> tuple[float, float]:
-    async with create_client() as client:
+    async with connection() as client:
         x_position = await client.get_node(X_POSITION_NODE_ID).read_value()
         z_position = await client.get_node(Z_POSITION_NODE_ID).read_value()
     return x_position, z_position
@@ -122,7 +180,7 @@ async def _run_movement(command: str, started: asyncio.Future[None]) -> None:
     jog_node_id, position_node_id, limit, reached_limit = MOVEMENT_COMMANDS[command]
     logger.info("Starting movement command %s on OPC UA node %s", command, jog_node_id)
     try:
-        async with create_client() as client:
+        async with connection() as client:
             jog_node = client.get_node(jog_node_id)
             position_node = client.get_node(position_node_id)
             try:
@@ -159,7 +217,7 @@ async def stop() -> None:
             await _cancel_movement()
         except Exception as exc:
             failures.append(exc)
-        async with create_client() as client:
+        async with connection() as client:
             for node_id in (
                 X_JOG_NEG_NODE_ID,
                 X_JOG_POS_NODE_ID,
@@ -178,7 +236,7 @@ async def stop() -> None:
 async def set_home() -> None:
     logger.info("Starting home command on OPC UA node %s", HOME_NODE_ID)
     try:
-        async with create_client() as client:
+        async with connection() as client:
             node = client.get_node(HOME_NODE_ID)
             x_velocity_node = client.get_node(X_VELOCITY_NODE_ID)
             z_velocity_node = client.get_node(Z_VELOCITY_NODE_ID)
@@ -203,7 +261,7 @@ async def set_home() -> None:
         raise
     finally:
         try:
-            async with create_client() as client:
+            async with connection() as client:
                 node = client.get_node(HOME_NODE_ID)
                 await node.write_value(False)
                 logger.info("Set home execute node to false")

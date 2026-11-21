@@ -15,7 +15,7 @@ from pydantic import BaseModel, StrictStr
 from starlette.concurrency import run_in_threadpool
 
 from .command_dispatcher import UnsupportedCommandError, execute_command, get_running_command
-from .opc_client import get_position, shutdown_movement
+from .opc_client import get_position, shutdown_connection
 
 load_dotenv(".env")
 
@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        await shutdown_movement()
+        await shutdown_connection()
 
 
 app = FastAPI(lifespan=lifespan)

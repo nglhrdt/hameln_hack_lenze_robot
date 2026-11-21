@@ -280,6 +280,90 @@ class StatusSocketTests(unittest.TestCase):
 
 
 class OpcClientTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncTearDown(self):
+        await opc_client.shutdown_connection()
+
+    @patch("input_to_cmd.opc_client.create_client")
+    async def test_concurrent_position_reads_share_one_connection(self, create_client):
+        context = create_client.return_value
+        client = context.__aenter__.return_value
+        connecting = asyncio.Event()
+        connected = asyncio.Event()
+
+        async def connect():
+            connecting.set()
+            await connected.wait()
+            return client
+
+        context.__aenter__.side_effect = connect
+        node = MagicMock()
+        node.read_value = AsyncMock(return_value=12.0)
+        client.get_node = MagicMock(return_value=node)
+
+        reads = asyncio.gather(*(opc_client.get_position() for _ in range(10)))
+        await connecting.wait()
+        context.__aenter__.assert_awaited_once_with()
+        connected.set()
+        results = await reads
+
+        self.assertEqual(results, [(12.0, 12.0)] * 10)
+        create_client.assert_called_once_with()
+        context.__aenter__.assert_awaited_once_with()
+        context.__aexit__.assert_not_awaited()
+        await opc_client.shutdown_connection()
+        context.__aexit__.assert_awaited_once_with(None, None, None)
+
+    @patch("input_to_cmd.opc_client.create_client")
+    async def test_position_and_movement_reuse_connection_after_limit(self, create_client):
+        context = create_client.return_value
+        client = context.__aenter__.return_value
+        jog, x, z = MagicMock(), MagicMock(), MagicMock()
+        jog.write_value = AsyncMock()
+        x.read_value = AsyncMock(return_value=20.0)
+        z.read_value = AsyncMock(return_value=30.0)
+        client.get_node = MagicMock(side_effect={
+            opc_client.X_JOG_NEG_NODE_ID: jog,
+            opc_client.X_POSITION_NODE_ID: x,
+            opc_client.Z_POSITION_NODE_ID: z,
+        }.__getitem__)
+
+        self.assertEqual(await opc_client.get_position(), (20.0, 30.0))
+        await opc_client.move("move_left")
+        self.assertEqual(await opc_client.get_position(), (20.0, 30.0))
+        x.read_value.return_value = 16.0
+        await asyncio.wait_for(opc_client._movement_task, timeout=1)
+        self.assertEqual(await opc_client.get_position(), (16.0, 30.0))
+        create_client.assert_called_once_with()
+        context.__aenter__.assert_awaited_once_with()
+        context.__aexit__.assert_not_awaited()
+        self.assertEqual([call.args for call in jog.write_value.await_args_list], [
+            (True,), (False,),
+        ])
+
+    @patch("input_to_cmd.opc_client.create_client")
+    async def test_cancelled_connection_is_closed_before_retry(self, create_client):
+        context = create_client.return_value
+        connecting = asyncio.Event()
+
+        async def connect():
+            connecting.set()
+            await asyncio.Future()
+
+        context.__aenter__.side_effect = connect
+        task = asyncio.create_task(opc_client.get_position())
+        await connecting.wait()
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        context.__aexit__.assert_awaited_once_with(None, None, None)
+        self.assertIsNone(opc_client._client_context)
+
+        context.__aenter__.side_effect = None
+        node = MagicMock()
+        node.read_value = AsyncMock(return_value=1.0)
+        context.__aenter__.return_value.get_node = MagicMock(return_value=node)
+        self.assertEqual(await opc_client.get_position(), (1.0, 1.0))
+
     @patch("input_to_cmd.opc_client.create_client")
     async def test_get_running_command_reports_active_movement(self, create_client):
         jog, position = MagicMock(), MagicMock()
@@ -303,8 +387,9 @@ class OpcClientTests(unittest.IsolatedAsyncioTestCase):
         await opc_client.move("move_left")
         self.assertEqual(opc_client.get_running_command(), "move_left")
 
-        await opc_client.shutdown_movement()
+        await opc_client.shutdown_connection()
         self.assertIsNone(opc_client.get_running_command())
+        create_client.return_value.__aexit__.assert_awaited_once_with(None, None, None)
 
     @patch("input_to_cmd.opc_client.create_client")
     async def test_get_position_returns_x_and_z_coordinates(self, create_client):
@@ -337,6 +422,7 @@ class OpcClientTests(unittest.IsolatedAsyncioTestCase):
             opc_client.Z_VELOCITY_NODE_ID: z,
         }[node])
         await opc_client.set_home()
+        create_client.assert_called_once_with()
         self.assertEqual(home.write_value.await_args_list[0].args, (True,))
         self.assertEqual(home.write_value.await_args_list[1].args, (False,))
         self.assertEqual(x.read_value.await_count, 5)
@@ -414,6 +500,7 @@ class OpcClientTests(unittest.IsolatedAsyncioTestCase):
                 [(True,)],
             )
             await opc_client.stop()
+            create_client.assert_called_once_with()
             self.assertTrue(opc_client._movement_task is None)
             for node_id in (
                 opc_client.X_JOG_NEG_NODE_ID, opc_client.X_JOG_POS_NODE_ID,

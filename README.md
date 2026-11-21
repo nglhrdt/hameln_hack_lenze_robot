@@ -89,6 +89,9 @@ movement command, shutdown, an error, or its configured limit (X: 16.0 to
 319.0; Z: -11.0 to 155.0). A new movement command stops the previous movement
 first. The `stop` command clears all four manual jog nodes. Run only one API
 process controlling the device so all commands share the same movement monitor.
+Position polling, movement, home, and stop share one lazily opened OPC UA
+connection per process. Shutdown stops active movement before closing that
+connection; use a single server worker to avoid opening additional sessions.
 HTTP 200 returns `{"result":"command exectued"}` after movement starts (or
 immediately if its limit has already been reached); monitoring failures after
 the response are logged. Other commands return after execution finishes; low velocity

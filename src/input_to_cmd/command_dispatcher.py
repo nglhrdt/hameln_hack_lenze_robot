@@ -1,7 +1,7 @@
 import asyncio
 
 from .opc_client import get_running_command as get_running_movement
-from .opc_client import move, set_home, shutdown_movement, stop
+from .opc_client import move, set_home, shutdown_connection, stop
 
 
 class UnsupportedCommandError(ValueError):
@@ -45,7 +45,7 @@ async def main() -> None:
                 break
             await execute_command(command)
     finally:
-        await shutdown_movement()
+        await shutdown_connection()
 
 
 if __name__ == "__main__":
