@@ -39,6 +39,13 @@ curl -X POST http://127.0.0.1:8000/command \
 Currently only `inputType: "text"` is supported. Image, audio, and video
 inputs are not yet supported and are rejected.
 
+Browser CORS preflight requests are supported. All origins are allowed by
+default (`CORS_ALLOWED_ORIGINS=*`). To restrict them, set
+`CORS_ALLOWED_ORIGINS` in `.env` to a comma-separated list of exact frontend
+origins (including scheme and port), then restart the API. Allowing all origins
+lets any website send commands from a browser that can reach the API. CORS is
+not authentication; protect access to the API separately.
+
 The `HOST`, `PORT`, `MODEL`, `AI_API_URL`, and `COMMAND_API_URL` settings
 control the listening address, model, and API endpoints. `COMMAND_API_URL` must
 be an HTTP URL without credentials.
@@ -47,7 +54,7 @@ Set `LOG_LEVEL=DEBUG` in `.env` to log command-processing steps and the
 execution server's response status. Connection failures are logged with their
 underlying error. Logs do not include the API key or raw input text.
 
-The model extracts one of `home`, `move right`, `move up`, or `move left`.
+The model extracts one of `home`, `move right`, `move up`, `move left`, or `stop`.
 The command is printed and sent as JSON to
 `http://192.168.5.202:8000/command` by default. A successful response from
 that server returns HTTP 200 with `{"result":"command exectued"}`; this confirms
@@ -58,6 +65,8 @@ execution status may be unknown; check the device before retrying.
 
 Model interpretation can be incorrect even when the returned command is valid.
 Use appropriate independent safety controls before connecting a physical device.
+The `stop` command depends on the model, network, and command server; it is not
+a substitute for an independent emergency stop.
 
 ## Hurl test
 

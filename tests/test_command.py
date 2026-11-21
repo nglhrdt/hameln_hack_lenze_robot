@@ -35,13 +35,14 @@ class CommandTests(unittest.TestCase):
         connection = mock_connection.return_value
         connection.getresponse.return_value.status = 200
 
-        for extracted in ("home", "move right", "move up", "move left"):
+        for extracted in ("home", "move right", "move up", "move left", "stop"):
             with self.subTest(command=extracted):
+                text = "Stop the robot" if extracted == "stop" else "My request"
                 client.chat.completions.create.return_value.choices = [
                     SimpleNamespace(message=SimpleNamespace(content=extracted))
                 ]
                 response = self.client.post(
-                    "/command", json={"inputType": "text", "data": "My request"}
+                    "/command", json={"inputType": "text", "data": text}
                 )
 
                 self.assertEqual(response.status_code, 200)
@@ -54,10 +55,12 @@ class CommandTests(unittest.TestCase):
                     model="smart-city-fast",
                     messages=[
                         {"role": "system", "content": EXTRACTION_INSTRUCTIONS},
-                        {"role": "user", "content": "My request"},
+                        {"role": "user", "content": text},
                     ],
                     max_tokens=1024,
                 )
+                if extracted == "stop":
+                    self.assertIn("stop", EXTRACTION_INSTRUCTIONS)
                 mock_connection.assert_called_once_with("192.168.5.202", 8000, timeout=10)
                 connection.request.assert_called_once_with(
                     "POST",
@@ -249,6 +252,71 @@ class CommandTests(unittest.TestCase):
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_cors_preflight_and_post_response(self):
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+        env["CORS_ALLOWED_ORIGINS"] = " http://frontend.test:3000, http://other.test "
+        script = """
+import json
+from types import SimpleNamespace
+from unittest.mock import patch
+from fastapi.testclient import TestClient
+from input_to_cmd.__main__ import app
+
+client = TestClient(app)
+headers = {"Origin": "http://frontend.test:3000", "Access-Control-Request-Method": "POST",
+           "Access-Control-Request-Headers": "content-type"}
+allowed = client.options("/command", headers=headers)
+headers["Origin"] = "http://untrusted.test"
+denied = client.options("/command", headers=headers)
+headers["Origin"] = "http://frontend.test:3000"
+headers["Access-Control-Request-Headers"] = "x-unapproved"
+denied_header = client.options("/command", headers=headers)
+post = client.post("/command", headers={"Origin": "http://frontend.test:3000"}, json={})
+with patch.dict("os.environ", {"TEST_KEY": "test-key"}), \\
+     patch("input_to_cmd.__main__.OpenAI") as ai, \\
+     patch("input_to_cmd.__main__.http.client.HTTPConnection") as connection, \\
+     patch("builtins.print"):
+    ai.return_value.__enter__.return_value.chat.completions.create.return_value.choices = [
+        SimpleNamespace(message=SimpleNamespace(content="stop"))
+    ]
+    connection.return_value.getresponse.return_value.status = 200
+    success = client.post("/command", headers={"Origin": "http://frontend.test:3000"},
+                          json={"inputType": "text", "data": "Stop"})
+print(json.dumps([allowed.status_code, allowed.headers.get("access-control-allow-origin"),
+                  allowed.headers.get("access-control-allow-methods"),
+                  denied.status_code, denied.headers.get("access-control-allow-origin"),
+                  denied_header.status_code, post.status_code,
+                  post.headers.get("access-control-allow-origin"), success.status_code,
+                  success.headers.get("access-control-allow-origin")]))
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [sys.executable, "-c", script], cwd=directory, env=env,
+                check=True, capture_output=True, text=True,
+            )
+            values = json.loads(result.stdout)
+            self.assertEqual(values[0:2], [200, "http://frontend.test:3000"])
+            self.assertIn("POST", values[2])
+            self.assertEqual(values[3:], [
+                400, None, 400, 422, "http://frontend.test:3000", 200, "http://frontend.test:3000",
+            ])
+
+            for setting in (None, "*"):
+                with self.subTest(origins=setting):
+                    if setting is None:
+                        env.pop("CORS_ALLOWED_ORIGINS", None)
+                    else:
+                        env["CORS_ALLOWED_ORIGINS"] = setting
+                    result = subprocess.run(
+                        [sys.executable, "-c", script], cwd=directory, env=env,
+                        check=True, capture_output=True, text=True,
+                    )
+                    values = json.loads(result.stdout)
+                    self.assertEqual(values[0:2], [200, "*"])
+                    self.assertIn("POST", values[2])
+                    self.assertEqual(values[3:], [200, "*", 400, 422, "*", 200, "*"])
+
     def test_log_level_controls_debug_output(self):
         env = os.environ.copy()
         env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")

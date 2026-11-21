@@ -7,7 +7,8 @@ from urllib.parse import urlsplit
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
+from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 from pydantic import BaseModel, StrictStr
 
@@ -21,14 +22,24 @@ MODEL = os.getenv("MODEL", "smart-city-fast")
 AI_API_URL = os.getenv("AI_API_URL", "https://ki.mwl.merona.de/v1")
 COMMAND_API_URL = os.getenv("COMMAND_API_URL", "http://192.168.5.202:8000/command")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+CORS_ALLOWED_ORIGINS = [
+    origin.strip() for origin in os.getenv("CORS_ALLOWED_ORIGINS", "*").split(",") if origin.strip()
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ALLOWED_ORIGINS,
+    allow_methods=["POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
+)
 
 logger = logging.getLogger("input_to_cmd")
 logger.setLevel(LOG_LEVEL)
 
-COMMANDS = {"home", "move right", "move up", "move left"}
+COMMANDS = {"home", "move right", "move up", "move left", "stop"}
 EXTRACTION_INSTRUCTIONS = (
     "Extract exactly one command from the user's input. "
-    "The only valid commands are: home, move right, move up, move left. "
+    "The only valid commands are: home, move right, move up, move left, stop. "
     "Return only the exact command in lowercase, with no other text. "
     "If the input does not clearly specify exactly one command, return NONE."
 )
@@ -37,7 +48,6 @@ EXTRACTION_INSTRUCTIONS = (
 class CommandInput(BaseModel):
     inputType: Literal["text"]
     data: StrictStr
-
 
 @app.post("/command")
 def command(content: CommandInput) -> dict[str, str]:
