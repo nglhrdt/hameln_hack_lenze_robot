@@ -220,7 +220,7 @@ async def command(content: CommandInput) -> dict[str, str]:
         points = [
             (
                 X_MIN + point.x * (X_MAX - X_MIN),
-                Z_MIN + point.z * (Z_MAX - Z_MIN),
+                Z_MAX - point.z * (Z_MAX - Z_MIN),
             )
             for point in content.points
         ]

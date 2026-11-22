@@ -43,12 +43,12 @@ non-empty array of objects with `x` and `z` percentages:
 ```bash
 curl -X POST http://127.0.0.1:8000/command \
   -H 'Content-Type: application/json' \
-  --data '{"inputType":"point","points":[{"x":0,"z":0},{"x":50,"z":50},{"x":100,"z":100}]}'
+  --data '{"inputType":"point","points":[{"x":0,"z":0},{"x":0.5,"z":0.5},{"x":1,"z":1}]}'
 ```
 
-Each coordinate must be a number from 0 to 100. Percentages map linearly from
-the minimum to the maximum of the corresponding axis: X 16.0 to 319.0 and
-Z -8.0 to 155.0. Point commands write the profile and start the robot's path;
+Each coordinate must be a normalized number from 0 to 1, with (0, 0) at the
+upper left. X maps linearly from 16.0 to 319.0, while Z maps from 155.0 at the
+top to -8.0 at the bottom. Point commands write the profile and start the robot's path;
 the number of points cannot exceed the device's profile buffer capacity.
 Image, audio, and video inputs are not supported and are rejected.
 

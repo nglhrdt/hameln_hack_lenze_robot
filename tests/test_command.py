@@ -195,12 +195,17 @@ class CommandTests(unittest.TestCase):
         response = self.client.post(
             "/command",
             json={"inputType": "point", "points": [
-                {"x": 0.0, "z": 1.0}, {"x": 0.5, "z": 0.5}, {"x": 1.0, "z": 0.0},
+                {"x": 0.0, "z": 0.0}, {"x": 1.0, "z": 0.0},
+                {"x": 0.0, "z": 1.0}, {"x": 1.0, "z": 1.0},
+                {"x": 0.5, "z": 0.5}, {"x": 0.25, "z": 0.75},
             ]},
         )
 
         self.assertEqual(response.status_code, 200)
-        write_points.assert_awaited_once_with([(16.0, 155.0), (167.5, 73.5), (319.0, -8.0)])
+        write_points.assert_awaited_once_with([
+            (16.0, 155.0), (319.0, 155.0), (16.0, -8.0), (319.0, -8.0),
+            (167.5, 73.5), (91.75, 32.75),
+        ])
         mock_openai.assert_not_called()
 
     @patch("input_to_cmd.api.OpenAI")
@@ -258,7 +263,7 @@ class CommandHistoryTests(unittest.TestCase):
             "inputType": "instantCommand", "data": "stop",
         }).status_code, 500)
         self.assertEqual(self.client.post("/command", json={
-            "inputType": "point", "points": [{"x": 50, "z": 50}],
+            "inputType": "point", "points": [{"x": 0.25, "z": 0.25}],
         }).status_code, 200)
         self.assertEqual(self.client.post("/command", json={
             "inputType": "instantCommand", "data": "invalid",
@@ -269,9 +274,9 @@ class CommandHistoryTests(unittest.TestCase):
         self.assertEqual([event["command"] for event in events], ["point", "stop", "home"])
         self.assertEqual([event["outcome"] for event in events], ["succeeded", "failed", "succeeded"])
         self.assertEqual(events[0]["source"], {
-            "inputType": "point", "points": [{"x": 50.0, "z": 50.0}],
+            "inputType": "point", "points": [{"x": 0.25, "z": 0.25}],
         })
-        self.assertEqual(events[0]["points"], [[167.5, 73.5]])
+        self.assertEqual(events[0]["points"], [[91.75, 114.25]])
         self.assertEqual(events[1]["source"], {"inputType": "instantCommand", "data": "stop"})
         self.assertEqual(events[2]["source"], {"inputType": "text", "data": "Bitte nach Hause"})
         self.assertEqual(self.client.get("/command-history").json(), events)
