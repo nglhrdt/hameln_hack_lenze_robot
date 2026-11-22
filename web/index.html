@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="de">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lenze Robot Control</title>
+    <title>JARVIS</title>
     <link rel="icon" href="./favicon.ico" type="image/x-icon">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@6.0.0-alpha.1/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-B/GM4XqrwHnWXNOWMbloTmrYXZg10cakYGmpfsR/bbzQ6JAJI4ihuyADKLnBgrCe" crossorigin="anonymous">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@6.0.0-alpha.1/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-B/GM4XqrwHnWXNOWMbloTmrYXZg10cakYGmpfsR/bbzQ6JAJI4ihuyADKLnBgrCe" crossorigin="anonymous">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
     <style>
         body {
@@ -16,23 +18,84 @@
             min-height: 100vh;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         }
+
         .card-grid {
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
-            grid-auto-rows: clamp(38rem, calc((100vh - 3rem) / 2), 40rem);
             gap: 1rem;
             width: 100%;
             max-width: 1532px;
         }
+
         .card {
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
             min-width: 0;
             min-height: 0;
+            aspect-ratio: 16 / 12;
+            overflow-y: auto;
         }
+
+        .card-header {
+            flex-direction: row;
+            flex-shrink: 0;
+            overflow-x: auto;
+        }
+
+        .card-header .card-title {
+            flex: 1 1 0;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .card-header>.card-icon,
+        .card-header>button,
+        .card-header>select {
+            flex-shrink: 0;
+            white-space: nowrap;
+        }
+
         .card-body {
             min-height: 0;
             overflow-y: auto;
         }
+
+        .control-card .card-body {
+            flex: 0 0 auto;
+            overflow-y: visible;
+        }
+
+        .card-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.65);
+            z-index: 1000;
+        }
+
+        .card-backdrop[hidden],
+        .card-stop {
+            display: none !important;
+        }
+
+        .card.is-expanded {
+            position: fixed;
+            inset: 1rem;
+            width: auto;
+            height: auto;
+            aspect-ratio: auto;
+            z-index: 1001;
+        }
+
+        .card.is-expanded .card-stop {
+            display: inline-block !important;
+        }
+
+        .control-card.is-expanded .card-body {
+            flex: 1 1 auto;
+            overflow-y: auto;
+        }
+
         .device-view {
             display: block;
             width: 100%;
@@ -40,37 +103,47 @@
             aspect-ratio: 16 / 9;
             border: 0;
         }
+
         .btn:disabled {
             opacity: 0.6;
             cursor: not-allowed;
         }
+
         .btn.loading {
             pointer-events: none;
         }
+
         #text-command-spinner[hidden] {
             display: none !important;
         }
+
         .btn.command-active {
             box-shadow: 0 0 0 4px #ffc107;
         }
+
         [data-kasten-only][hidden] {
             display: none !important;
         }
+
         #configuration-retry[hidden] {
             display: none !important;
         }
+
         #save-sequence[hidden] {
             display: none !important;
         }
+
         #command-history {
             overflow-y: auto;
         }
+
         .settings-dialog {
             width: min(90vw, 480px);
             border: 0;
             border-radius: 0.5rem;
             padding: 1.5rem;
         }
+
         .image-marquee {
             position: fixed;
             bottom: 0;
@@ -79,25 +152,43 @@
             overflow: hidden;
             pointer-events: none;
         }
+
         .image-marquee img {
             display: block;
             width: 64px;
             animation: marquee 12s linear infinite;
         }
+
         @keyframes marquee {
-            from { transform: translateX(100vw); }
-            to { transform: translateX(-100%); }
+            from {
+                transform: translateX(100vw);
+            }
+
+            to {
+                transform: translateX(-100%);
+            }
         }
+
         @media (max-width: 960px) {
             .card-grid {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
             }
         }
+
         @media (max-width: 640px) {
             .card-grid {
                 grid-template-columns: minmax(0, 1fr);
             }
+
+            .card-header {
+                gap: 0.25rem !important;
+            }
+
+            .card-header .btn {
+                font-size: 0.75rem;
+            }
         }
+
         @media (prefers-reduced-motion: reduce) {
             .image-marquee {
                 display: none;
@@ -105,125 +196,151 @@
         }
     </style>
 </head>
+
 <body>
     <main class="card-grid">
-    <div class="card">
-        <div class="card-header bg-primary text-white d-flex flex-wrap justify-content-between align-items-center gap-2">
-            <h5 class="card-title mb-0">Lenze Roboter Steuerung</h5>
-            <label class="visually-hidden" for="device-type">Gerätetyp</label>
-            <select class="form-select form-select-sm w-auto" id="device-type" disabled>
-                <option value="kasten">Kasten</option>
-                <option value="raeder">Räder</option>
-            </select>
-        </div>
-        <div class="card-body">
-            <p class="card-text">
-                Willkommen zur Roboter-Steuerungsoberfläche. 
-            </p>
-            <p class="small mb-1" id="configuration-status" role="status">Konfiguration wird geladen...</p>
-            <button type="button" class="btn btn-sm btn-outline-secondary mb-2" id="configuration-retry" hidden>Erneut laden</button>
-            <p class="text-center mb-0" id="position">X: -- | Z: --</p>
-            <p class="text-center text-muted small mb-2" id="status">Verbindung wird hergestellt...</p>
-            <div class="d-flex justify-content-center">
-                <div style="width: 240px;">
-                    <!-- Row 1 -->
-                    <div class="d-grid gap-2 mb-2" style="grid-template-columns: 1fr 1fr 1fr;">
-                        <div></div>
-                        <button class="btn btn-primary rounded-pill p-3" data-command="move_up">
-                            <i class="bi bi-arrow-up" style="font-size: 1.5rem;"></i>
-                        </button>
-                        <div></div>
-                    </div>
-                    
-                    <!-- Row 2 -->
-                    <div class="d-grid gap-2 mb-2" style="grid-template-columns: 1fr 1fr 1fr;">
-                        <button class="btn btn-primary rounded-pill p-3" data-command="move_left">
-                            <i class="bi bi-arrow-left" style="font-size: 1.5rem;"></i>
-                        </button>
-                        <button class="btn btn-danger rounded-pill p-3" data-command="stop">
-                            <i class="bi bi-stop-fill" style="font-size: 1.5rem;"></i>
-                        </button>
-                        <button class="btn btn-primary rounded-pill p-3" data-command="move_right">
-                            <i class="bi bi-arrow-right" style="font-size: 1.5rem;"></i>
-                        </button>
-                    </div>
-                    
-                    <!-- Row 3 -->
-                    <div class="d-grid gap-2" style="grid-template-columns: 1fr 1fr 1fr;">
-                        <div></div>
-                        <button class="btn btn-primary rounded-pill p-3" data-command="move_down">
-                            <i class="bi bi-arrow-down" style="font-size: 1.5rem;"></i>
-                        </button>
-                        <div></div>
+        <div class="card control-card" tabindex="0">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center gap-2">
+                <i class="bi bi-robot card-icon" aria-hidden="true"></i>
+                <h5 class="card-title mb-0">Jarvis Steuerung</h5>
+                <label class="visually-hidden" for="device-type">Gerätetyp</label>
+                <select class="form-select form-select-sm w-auto" id="device-type" disabled>
+                    <option value="kasten">Kasten</option>
+                    <option value="raeder">Räder</option>
+                </select>
+            </div>
+            <div class="card-body">
+                <p class="small mb-1" id="configuration-status" role="status">Konfiguration wird geladen...</p>
+                <button type="button" class="btn btn-sm btn-outline-secondary mb-2" id="configuration-retry"
+                    hidden>Erneut laden</button>
+                <p class="text-center mb-0" id="position">X: -- | Z: --</p>
+                <p class="text-center text-muted small mb-2" id="status">Verbindung wird hergestellt...</p>
+                <div class="d-flex justify-content-center">
+                    <div style="width: 240px;">
+                        <!-- Row 1 -->
+                        <div class="d-grid gap-2 mb-2" style="grid-template-columns: 1fr 1fr 1fr;">
+                            <div></div>
+                            <button class="btn btn-primary rounded-pill p-3" data-command="move_up">
+                                <i class="bi bi-arrow-up" style="font-size: 1.5rem;"></i>
+                            </button>
+                            <div></div>
+                        </div>
+
+                        <!-- Row 2 -->
+                        <div class="d-grid gap-2 mb-2" style="grid-template-columns: 1fr 1fr 1fr;">
+                            <button class="btn btn-primary rounded-pill p-3" data-command="move_left">
+                                <i class="bi bi-arrow-left" style="font-size: 1.5rem;"></i>
+                            </button>
+                            <button class="btn btn-danger rounded-pill p-3" data-command="stop">
+                                <i class="bi bi-stop-fill" style="font-size: 1.5rem;"></i>
+                            </button>
+                            <button class="btn btn-primary rounded-pill p-3" data-command="move_right">
+                                <i class="bi bi-arrow-right" style="font-size: 1.5rem;"></i>
+                            </button>
+                        </div>
+
+                        <!-- Row 3 -->
+                        <div class="d-grid gap-2" style="grid-template-columns: 1fr 1fr 1fr;">
+                            <div></div>
+                            <button class="btn btn-primary rounded-pill p-3" data-command="move_down">
+                                <i class="bi bi-arrow-down" style="font-size: 1.5rem;"></i>
+                            </button>
+                            <div></div>
+                        </div>
                     </div>
                 </div>
+                <p class="text-center small mb-0" id="hidden-command" aria-live="polite"></p>
             </div>
-            <p class="text-center small mb-0" id="hidden-command" aria-live="polite"></p>
-        </div>
-        <div class="card-footer text-muted">
-            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-                <small>Version 1.0 | Lenze AI Robot</small>
-                <button type="button" class="btn btn-primary btn-sm rounded-pill" data-command="home" data-kasten-only hidden>
-                    <i class="bi bi-house" aria-hidden="true"></i> Home
-                </button>
+            <div class="card-footer text-muted">
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                    <small>Version 1.0 | Lenze AI Robot</small>
+                    <button type="button" class="btn btn-primary btn-sm rounded-pill" data-command="home"
+                        data-kasten-only hidden>
+                        <i class="bi bi-house" aria-hidden="true"></i> Home
+                    </button>
+                </div>
             </div>
-            <small class="d-block mt-2">Ein Gerätetyp-Wechsel stoppt keine Bewegung.</small>
         </div>
-    </div>
 
-    <div class="card">
-        <div class="card-header bg-primary text-white d-flex flex-wrap justify-content-between align-items-center gap-2">
-            <h5 class="card-title mb-0">Befehlsverlauf</h5>
-            <button type="button" class="btn btn-light btn-sm" id="save-sequence" hidden>Sequenz speichern</button>
-        </div>
-        <div class="card-body">
-            <p class="small text-danger" id="history-warning" role="alert"></p>
-            <p class="small" id="history-status" role="status">Verlauf wird geladen...</p>
-            <p class="small" id="sequence-status" role="status"></p>
-            <ol class="list-group list-group-numbered" id="command-history" tabindex="0" aria-label="Befehlsverlauf"></ol>
-        </div>
-    </div>
-
-    <div class="card">
-        <div class="card-header bg-primary text-white d-flex flex-wrap justify-content-between align-items-center gap-2">
-            <h5 class="card-title mb-0">Sequenzen</h5>
-            <button type="button" class="btn btn-light btn-sm" id="sequences-refresh">Aktualisieren</button>
-        </div>
-        <div class="card-body">
-            <p class="small">Ausführen bewegt den Roboter.</p>
-            <p class="small" id="sequences-status" role="status">Sequenzen werden geladen...</p>
-            <p class="small" id="sequence-execution-status" role="status"></p>
-            <ul class="list-group" id="sequences-list"></ul>
-        </div>
-    </div>
-
-    <div class="card">
-        <div class="card-header bg-primary text-white">
-            <h5 class="card-title mb-0">Textbefehl</h5>
-        </div>
-        <div class="card-body">
-            <form id="text-command-form">
-                <label class="form-label" for="text-command">Befehl</label>
-                <textarea class="form-control" id="text-command" rows="4" aria-describedby="text-command-hint" required></textarea>
-                <p class="form-text mb-3" id="text-command-hint">Strg + Eingabe zum Senden</p>
-                <button class="btn btn-primary" type="submit">
-                    <span class="spinner-border spinner-border-sm me-1" id="text-command-spinner" aria-hidden="true" hidden></span>Senden
+        <div class="card">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center gap-2">
+                <i class="bi bi-mic card-icon" aria-hidden="true"></i>
+                <h5 class="card-title mb-0">Sprachbefehl</h5>
+            </div>
+            <div class="card-body">
+                <p>Aufnahme starten, sprechen und erneut klicken. Der erkannte Text wird sofort als Befehl gesendet und
+                    kann den Roboter bewegen.</p>
+                <button type="button" class="btn btn-primary" id="voice-command" aria-pressed="false">
+                    <i class="bi bi-mic" aria-hidden="true"></i> <span>Aufnahme starten</span>
                 </button>
-                <p class="small mt-2 mb-0" id="text-command-status" role="status"></p>
-            </form>
+                <p class="small mt-3 mb-1">Erkannter Text:</p>
+                <p id="voice-transcript" class="text-break"></p>
+                <p class="small" id="voice-status" role="status"></p>
+            </div>
         </div>
-    </div>
 
-    <div class="card">
-        <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center gap-2">
-            <h5 class="card-title mb-0">Geräteansicht</h5>
-            <button type="button" class="btn btn-light btn-sm" id="iframe-edit" disabled>URL ändern</button>
+        <div class="card">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center gap-2">
+                <i class="bi bi-keyboard card-icon" aria-hidden="true"></i>
+                <h5 class="card-title mb-0">Textbefehl</h5>
+            </div>
+            <div class="card-body">
+                <form id="text-command-form">
+                    <label class="form-label" for="text-command">Befehl</label>
+                    <textarea class="form-control" id="text-command" rows="4" aria-describedby="text-command-hint"
+                        required></textarea>
+                    <p class="form-text mb-3" id="text-command-hint">Strg + Eingabe zum Senden</p>
+                    <button class="btn btn-primary" type="submit">
+                        <span class="spinner-border spinner-border-sm me-1" id="text-command-spinner" aria-hidden="true"
+                            hidden></span>Senden
+                    </button>
+                    <p class="small mt-2 mb-0" id="text-command-status" role="status"></p>
+                </form>
+            </div>
         </div>
-        <div class="card-body">
-            <iframe class="device-view" id="device-frame" title="Geräteansicht"></iframe>
+
+        <div class="card">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center gap-2">
+                <i class="bi bi-clock-history card-icon" aria-hidden="true"></i>
+                <h5 class="card-title mb-0">Befehlsverlauf</h5>
+                <button type="button" class="btn btn-light btn-sm" id="save-sequence" hidden>Sequenz speichern</button>
+            </div>
+            <div class="card-body">
+                <p class="small text-danger" id="history-warning" role="alert"></p>
+                <p class="small" id="history-status" role="status">Verlauf wird geladen...</p>
+                <p class="small" id="sequence-status" role="status"></p>
+                <ol class="list-group list-group-numbered" id="command-history" tabindex="0"
+                    aria-label="Befehlsverlauf"></ol>
+            </div>
         </div>
-    </div>
+
+        <div class="card">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center gap-2">
+                <i class="bi bi-collection-play card-icon" aria-hidden="true"></i>
+                <h5 class="card-title mb-0">Sequenzen</h5>
+                <button type="button" class="btn btn-light btn-sm" id="sequences-refresh">Aktualisieren</button>
+            </div>
+            <div class="card-body">
+                <p class="small">Ausführen bewegt den Roboter.</p>
+                <p class="small" id="sequences-status" role="status">Sequenzen werden geladen...</p>
+                <p class="small" id="sequence-execution-status" role="status"></p>
+                <ul class="list-group" id="sequences-list"></ul>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center gap-2">
+                <i class="bi bi-display card-icon" aria-hidden="true"></i>
+                <h5 class="card-title mb-0">Geräteansicht</h5>
+                <button type="button" class="btn btn-light btn-sm" id="iframe-edit" disabled>URL ändern</button>
+            </div>
+            <div class="card-body">
+                <iframe class="device-view" id="device-frame" title="Geräteansicht"></iframe>
+            </div>
+        </div>
     </main>
+
+    <div class="card-backdrop" id="card-backdrop" hidden></div>
 
     <dialog class="settings-dialog" id="iframe-dialog" aria-labelledby="iframe-dialog-title">
         <form id="iframe-form">
@@ -241,16 +358,18 @@
         <img src="./images/BlauerPacman.gif" alt="">
     </div>
 
-    <script type="module" src="https://cdn.jsdelivr.net/npm/bootstrap@6.0.0-alpha.1/dist/js/bootstrap.bundle.min.js" integrity="sha384-1a/pXj49ZQ1aHEmrJ+gMw1otqoVsYwlEnlD8mIfY2TV03r20Y0CN7uqx1tQogjPL" crossorigin="anonymous"></script>
+    <script type="module" src="https://cdn.jsdelivr.net/npm/bootstrap@6.0.0-alpha.1/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-1a/pXj49ZQ1aHEmrJ+gMw1otqoVsYwlEnlD8mIfY2TV03r20Y0CN7uqx1tQogjPL"
+        crossorigin="anonymous"></script>
     <script>
         const COMMANDS = ["home", "move_right", "move_up", "move_left", "move_down", "stop"];
-        
+
         async function executeInstantCommand(command) {
             if (!COMMANDS.includes(command)) {
                 console.error(`Invalid command: ${command}`);
                 return;
             }
-            
+
             try {
                 const response = await fetch("/command", {
                     method: "POST",
@@ -262,12 +381,12 @@
                         data: command,
                     }),
                 });
-                
+
                 if (!response.ok) {
                     console.error(`Command execution failed: ${response.status} ${response.statusText}`);
                     return;
                 }
-                
+
                 const result = await response.json();
                 if (result.history_warning) {
                     document.getElementById("history-warning").textContent =
@@ -278,13 +397,106 @@
                 console.error(`Error executing command: ${error}`);
             }
         }
-        
-        document.addEventListener("DOMContentLoaded", function() {
+
+        document.addEventListener("DOMContentLoaded", function () {
+            const cards = [...document.querySelectorAll(".card-grid > .card")];
+            const cardBackdrop = document.getElementById("card-backdrop");
+            let expandedCard = null;
+            let previousOverflow = "";
+            let previousInert = [];
+
+            function restoreCard() {
+                if (!expandedCard) {
+                    return;
+                }
+                const button = expandedCard.querySelector(".card-expand");
+                const title = expandedCard.querySelector(".card-title").textContent;
+                expandedCard.classList.remove("is-expanded");
+                expandedCard.removeAttribute("role");
+                expandedCard.removeAttribute("aria-modal");
+                expandedCard.removeAttribute("aria-label");
+                button.setAttribute("aria-label", `Karte ${title} vergrößern`);
+                button.title = "Karte vergrößern";
+                button.querySelector("i").className = "bi bi-arrows-fullscreen";
+                previousInert.forEach(([card, inert]) => card.inert = inert);
+                document.body.style.overflow = previousOverflow;
+                cardBackdrop.hidden = true;
+                expandedCard = null;
+                button.focus();
+            }
+
+            cards.forEach(card => {
+                const header = card.querySelector(".card-header");
+                const title = header.querySelector(".card-title").textContent;
+                const stop = document.createElement("button");
+                stop.type = "button";
+                stop.className = "btn btn-danger btn-sm card-stop";
+                stop.dataset.command = "stop";
+                stop.textContent = "Stop";
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = "btn btn-light btn-sm card-expand";
+                button.setAttribute("aria-label", `Karte ${title} vergrößern`);
+                button.title = "Karte vergrößern";
+                const icon = document.createElement("i");
+                icon.className = "bi bi-arrows-fullscreen";
+                icon.setAttribute("aria-hidden", "true");
+                button.append(icon);
+                header.append(stop, button);
+                button.addEventListener("click", function () {
+                    if (expandedCard === card) {
+                        restoreCard();
+                        return;
+                    }
+                    previousOverflow = document.body.style.overflow;
+                    previousInert = cards.filter(other => other !== card).map(other => [other, other.inert]);
+                    previousInert.forEach(([other]) => other.inert = true);
+                    document.body.style.overflow = "hidden";
+                    cardBackdrop.hidden = false;
+                    expandedCard = card;
+                    card.classList.add("is-expanded");
+                    card.setAttribute("role", "dialog");
+                    card.setAttribute("aria-modal", "true");
+                    card.setAttribute("aria-label", title);
+                    button.setAttribute("aria-label", `Karte ${title} wiederherstellen`);
+                    button.title = "Karte wiederherstellen";
+                    icon.className = "bi bi-fullscreen-exit";
+                    button.focus();
+                });
+            });
+            cardBackdrop.addEventListener("click", restoreCard);
+            document.addEventListener("keydown", function (e) {
+                if (!expandedCard || document.getElementById("iframe-dialog").open) {
+                    return;
+                }
+                if (e.key === "Escape") {
+                    e.preventDefault();
+                    restoreCard();
+                } else if (e.key === "Tab") {
+                    const focusable = [...expandedCard.querySelectorAll(
+                        'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), iframe, a[href], [tabindex]:not([tabindex="-1"])'
+                    )].filter(element => element.getClientRects().length && getComputedStyle(element).visibility !== "hidden");
+                    const first = focusable[0];
+                    const last = focusable[focusable.length - 1];
+                    if (e.shiftKey && (document.activeElement === first || !expandedCard.contains(document.activeElement))) {
+                        e.preventDefault();
+                        last.focus();
+                    } else if (!e.shiftKey && (document.activeElement === last || !expandedCard.contains(document.activeElement))) {
+                        e.preventDefault();
+                        first.focus();
+                    }
+                }
+            });
+
             const textForm = document.getElementById("text-command-form");
             const textInput = document.getElementById("text-command");
             const textStatus = document.getElementById("text-command-status");
             const textSubmit = textForm.querySelector('button[type="submit"]');
             const textSpinner = document.getElementById("text-command-spinner");
+            const voiceButton = document.getElementById("voice-command");
+            const voiceLabel = voiceButton.querySelector("span");
+            const voiceStatus = document.getElementById("voice-status");
+            const voiceTranscript = document.getElementById("voice-transcript");
             const historyList = document.getElementById("command-history");
             const historyStatus = document.getElementById("history-status");
             const saveSequence = document.getElementById("save-sequence");
@@ -300,6 +512,22 @@
             let sequenceLoadVersion = 0;
             let executingSequence = false;
 
+            async function sendTextCommand(text) {
+                const response = await fetch("/command", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ inputType: "text", data: text }),
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const result = await response.json();
+                if (result.history_warning) {
+                    document.getElementById("history-warning").textContent =
+                        "Befehl gesendet, aber der Verlauf konnte nicht gespeichert werden.";
+                }
+            }
+
             async function executeSequence(id) {
                 if (executingSequence) {
                     return;
@@ -309,7 +537,7 @@
                 executionStatus.classList.remove("text-danger");
                 executionStatus.textContent = `Sequenz ${id} wird ausgeführt...`;
                 try {
-                    const response = await fetch(`/sequences/${id}/execute`, {method: "POST"});
+                    const response = await fetch(`/sequences/${id}/execute`, { method: "POST" });
                     if (!response.ok) {
                         throw new Error(`HTTP ${response.status}`);
                     }
@@ -406,7 +634,7 @@
                 saveSequence.disabled = savingSequence;
             }
 
-            saveSequence.addEventListener("click", async function() {
+            saveSequence.addEventListener("click", async function () {
                 if (savingSequence) {
                     return;
                 }
@@ -417,8 +645,8 @@
                 try {
                     const response = await fetch("/sequences", {
                         method: "POST",
-                        headers: {"Content-Type": "application/json"},
-                        body: JSON.stringify({event_ids: [...selectedEvents]}),
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ event_ids: [...selectedEvents] }),
                     });
                     if (!response.ok) {
                         throw new Error(response.status === 409
@@ -495,7 +723,7 @@
                         input.dataset.historyId = event.id;
                         input.setAttribute("aria-label", `Punktbefehl ${event.id} auswählen`);
                         const text = document.createElement("span");
-                        input.addEventListener("change", function() {
+                        input.addEventListener("change", function () {
                             if (input.checked) {
                                 selectedEvents.add(event.id);
                             } else {
@@ -524,7 +752,7 @@
                 }
             }
 
-            textInput.addEventListener("keydown", function(e) {
+            textInput.addEventListener("keydown", function (e) {
                 if (e.key === "Enter" && e.ctrlKey && !e.altKey && !e.metaKey &&
                     !e.shiftKey && !e.isComposing) {
                     e.preventDefault();
@@ -534,7 +762,7 @@
                 }
             });
 
-            textForm.addEventListener("submit", async function(e) {
+            textForm.addEventListener("submit", async function (e) {
                 e.preventDefault();
                 if (textSubmit.disabled) {
                     return;
@@ -552,19 +780,7 @@
                 textStatus.classList.remove("text-danger");
                 textStatus.textContent = "Befehl wird verarbeitet...";
                 try {
-                    const response = await fetch("/command", {
-                        method: "POST",
-                        headers: {"Content-Type": "application/json"},
-                        body: JSON.stringify({inputType: "text", data: text}),
-                    });
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}`);
-                    }
-                    const result = await response.json();
-                    if (result.history_warning) {
-                        document.getElementById("history-warning").textContent =
-                            "Befehl gesendet, aber der Verlauf konnte nicht gespeichert werden.";
-                    }
+                    await sendTextCommand(text);
                     if (textInput.value === text) {
                         textInput.value = "";
                     }
@@ -577,6 +793,139 @@
                     textSpinner.hidden = true;
                     textSubmit.removeAttribute("aria-busy");
                     textSubmit.disabled = false;
+                }
+            });
+
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            let recognition = null;
+            let voiceState = "idle";
+            let finalTranscript = "";
+            let voiceError = false;
+
+            function setVoiceState(state) {
+                voiceState = state;
+                const recording = state === "recording";
+                voiceButton.disabled = state !== "idle" && !recording;
+                voiceButton.setAttribute("aria-pressed", String(recording));
+                voiceLabel.textContent = recording ? "Aufnahme stoppen und senden" : "Aufnahme starten";
+                voiceButton.classList.toggle("btn-danger", recording);
+                voiceButton.classList.toggle("btn-primary", !recording);
+            }
+
+            function voiceFailure(message) {
+                voiceStatus.classList.add("text-danger");
+                voiceStatus.textContent = message;
+            }
+
+            voiceButton.addEventListener("click", async function () {
+                if (voiceState === "recording") {
+                    setVoiceState("stopping");
+                    voiceStatus.textContent = "Aufnahme wird beendet...";
+                    try {
+                        recognition.stop();
+                    } catch (error) {
+                        console.error("Could not stop speech recognition", error);
+                        voiceError = true;
+                        voiceFailure("Aufnahme konnte nicht beendet werden. Es wurde kein Befehl gesendet.");
+                        try {
+                            recognition.abort();
+                        } catch (abortError) {
+                            console.error("Could not abort speech recognition", abortError);
+                            voiceFailure("Aufnahme konnte nicht beendet werden. Seite schließen und Mikrofon prüfen. Es wurde kein Befehl gesendet.");
+                        }
+                    }
+                    return;
+                }
+                if (voiceState !== "idle") {
+                    return;
+                }
+                voiceStatus.classList.remove("text-danger");
+                voiceTranscript.textContent = "";
+                finalTranscript = "";
+                voiceError = false;
+                if (!SpeechRecognition || !("processLocally" in SpeechRecognition.prototype) ||
+                    typeof SpeechRecognition.available !== "function" ||
+                    typeof SpeechRecognition.install !== "function") {
+                    voiceFailure("Lokale Spracherkennung wird von diesem Browser nicht unterstützt.");
+                    return;
+                }
+                setVoiceState("checking");
+                voiceStatus.textContent = "Spracherkennung wird überprüft...";
+                try {
+                    const options = { langs: ["de-DE"], processLocally: true };
+                    const availability = await SpeechRecognition.available(options);
+                    if (availability === "unavailable") {
+                        throw new Error("Das deutsche Sprachpaket ist nicht verfügbar.");
+                    }
+                    if (availability === "downloadable" || availability === "downloading") {
+                        voiceStatus.textContent = "Deutsches Sprachpaket wird heruntergeladen...";
+                        if (!await SpeechRecognition.install(options)) {
+                            throw new Error("Das deutsche Sprachpaket konnte nicht installiert werden.");
+                        }
+                        voiceStatus.textContent = "Sprachpaket installiert. Aufnahme erneut starten.";
+                        setVoiceState("idle");
+                        return;
+                    }
+                    if (availability !== "available") {
+                        throw new Error(`Unbekannter Verfügbarkeitsstatus: ${availability}`);
+                    }
+                    recognition = new SpeechRecognition();
+                    recognition.lang = "de-DE";
+                    recognition.processLocally = true;
+                    recognition.continuous = true;
+                    recognition.interimResults = true;
+                    recognition.onresult = function (event) {
+                        let final = "";
+                        let interim = "";
+                        for (let i = 0; i < event.results.length; i++) {
+                            const result = event.results[i];
+                            if (result.isFinal) {
+                                final += `${result[0].transcript.trim()} `;
+                            } else {
+                                interim += `${result[0].transcript.trim()} `;
+                            }
+                        }
+                        finalTranscript = final.trim();
+                        voiceTranscript.textContent = (final + interim).trim();
+                    };
+                    recognition.onerror = function (event) {
+                        voiceError = true;
+                        voiceFailure(`Spracherkennung fehlgeschlagen: ${event.error}. Es wurde kein Befehl gesendet.`);
+                    };
+                    recognition.onend = async function () {
+                        const shouldSend = voiceState === "stopping" && !voiceError;
+                        if (!shouldSend) {
+                            if (!voiceError) {
+                                voiceFailure("Aufnahme wurde unerwartet beendet. Es wurde kein Befehl gesendet.");
+                            }
+                            setVoiceState("idle");
+                            return;
+                        }
+                        if (!finalTranscript) {
+                            voiceFailure("Kein Text erkannt. Es wurde kein Befehl gesendet.");
+                            setVoiceState("idle");
+                            return;
+                        }
+                        voiceTranscript.textContent = finalTranscript;
+                        setVoiceState("sending");
+                        voiceStatus.textContent = "Befehl wird verarbeitet...";
+                        try {
+                            await sendTextCommand(finalTranscript);
+                            voiceStatus.textContent = "Befehl gesendet.";
+                        } catch (error) {
+                            console.error("Voice command failed", error);
+                            voiceFailure(`Senden nicht bestätigt: ${error.message}. Roboterstatus vor erneutem Senden prüfen.`);
+                        } finally {
+                            setVoiceState("idle");
+                        }
+                    };
+                    recognition.start();
+                    setVoiceState("recording");
+                    voiceStatus.textContent = "Aufnahme läuft...";
+                } catch (error) {
+                    console.error("Could not start speech recognition", error);
+                    voiceFailure(`Aufnahme konnte nicht gestartet werden: ${error.message}`);
+                    setVoiceState("idle");
                 }
             });
 
@@ -613,7 +962,7 @@
             async function saveConfiguration(changes) {
                 const response = await fetch("/configuration", {
                     method: "PATCH",
-                    headers: {"Content-Type": "application/json"},
+                    headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(changes),
                 });
                 if (!response.ok) {
@@ -659,14 +1008,14 @@
             }
 
             configurationRetry.addEventListener("click", loadConfiguration);
-            deviceType.addEventListener("change", async function() {
+            deviceType.addEventListener("change", async function () {
                 const selected = deviceType.value;
                 deviceType.disabled = true;
                 configurationStatus.classList.remove("text-danger");
                 configurationStatus.textContent = "Gerätetyp wird gespeichert...";
                 updateDeviceType();
                 try {
-                    const configuration = await saveConfiguration({device_type: selected});
+                    const configuration = await saveConfiguration({ device_type: selected });
                     savedDeviceType = configuration.device_type;
                     deviceType.value = savedDeviceType;
                     configurationStatus.textContent = "";
@@ -681,18 +1030,18 @@
                 }
             });
 
-            iframeEdit.addEventListener("click", function() {
+            iframeEdit.addEventListener("click", function () {
                 iframeUrl.value = savedIframeUrl;
                 iframeError.textContent = "";
                 iframeDialog.showModal();
             });
             iframeCancel.addEventListener("click", () => iframeDialog.close());
-            iframeDialog.addEventListener("cancel", function(e) {
+            iframeDialog.addEventListener("cancel", function (e) {
                 if (iframeSave.disabled) {
                     e.preventDefault();
                 }
             });
-            iframeForm.addEventListener("submit", async function(e) {
+            iframeForm.addEventListener("submit", async function (e) {
                 e.preventDefault();
                 if (iframeSave.disabled) {
                     return;
@@ -707,7 +1056,7 @@
                 iframeUrl.disabled = true;
                 iframeError.textContent = "";
                 try {
-                    const configuration = await saveConfiguration({iframe_url: iframeUrl.value});
+                    const configuration = await saveConfiguration({ iframe_url: iframeUrl.value });
                     savedIframeUrl = configuration.iframe_url;
                     deviceFrame.src = savedIframeUrl;
                     iframeDialog.close();
@@ -724,12 +1073,12 @@
             loadConfiguration();
 
             document.querySelectorAll("[data-command]").forEach(button => {
-                button.addEventListener("click", function(e) {
+                button.addEventListener("click", function (e) {
                     e.preventDefault();
                     const command = this.getAttribute("data-command");
                     this.disabled = true;
                     this.classList.add("loading");
-                    
+
                     executeInstantCommand(command).finally(() => {
                         this.disabled = false;
                         this.classList.remove("loading");
@@ -746,7 +1095,7 @@
                 ["s", "stop"],
             ]);
 
-            document.addEventListener("keydown", function(e) {
+            document.addEventListener("keydown", function (e) {
                 if (e.ctrlKey || e.altKey || e.metaKey || e.isComposing || iframeDialog.open ||
                     (e.target instanceof HTMLElement &&
                         (e.target.isContentEditable || e.target.closest("input, textarea, select")))) {
@@ -788,7 +1137,7 @@
                 const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
                 const socket = new WebSocket(`${protocol}//${window.location.host}/ws/status?history=1`);
 
-                socket.addEventListener("message", function(event) {
+                socket.addEventListener("message", function (event) {
                     let state;
                     try {
                         state = JSON.parse(event.data);
@@ -830,10 +1179,10 @@
                         status.textContent = "Position nicht verfügbar.";
                     }
                 });
-                socket.addEventListener("error", function() {
+                socket.addEventListener("error", function () {
                     console.error("Status WebSocket connection failed");
                 });
-                socket.addEventListener("close", function() {
+                socket.addEventListener("close", function () {
                     clearStatus("Statusverbindung getrennt. Erneuter Verbindungsversuch...");
                     historyLoaded = false;
                     historyStatus.classList.add("text-danger");
@@ -846,4 +1195,5 @@
         });
     </script>
 </body>
+
 </html>

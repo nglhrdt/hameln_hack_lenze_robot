@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>J.A.R.V.I.S.</title>
+<style>
+  :root { --bg:#030914; --cyan:#29e6ff; --ok:#38f8b8; --warn:#ff3355; --stop:#ff7b00; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:radial-gradient(circle at 50% 40%,#0a1f3d 0%,#040d1d 55%,var(--bg) 100%);
+    color:#dff8ff; font-family:'Segoe UI',Roboto,monospace; min-height:100vh; padding:16px; }
+  .layout { display:grid; grid-template-columns:minmax(0,480px) 340px; gap:16px;
+    justify-content:center; align-items:start; }
+  .main { display:flex; flex-direction:column; align-items:center; gap:14px; }
+  .stage { position:relative; width:360px; height:360px; max-width:100%; }
+  canvas { width:100%; height:100%; display:block; }
+  .center { position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; pointer-events:none; }
+  .brand { font-size:1rem; font-weight:700; letter-spacing:5px; text-shadow:0 0 14px rgba(41,230,255,.8); }
+  .tag { font-size:.62rem; letter-spacing:3px; opacity:.75; margin-top:4px; }
+  .pos { font-size:.95rem; letter-spacing:2px; color:var(--cyan); }
+  .net { font-size:.7rem; opacity:.6; }
+  .speech { min-height:2.6em; max-width:460px; text-align:center; font-size:.95rem; }
+  .speech.warn { color:var(--warn); }
+  .pad { display:grid; grid-template-columns:repeat(3,72px); gap:8px; }
+  button { background:rgba(22,119,255,.12); border:1px solid rgba(41,230,255,.35); color:#bfefff;
+    padding:10px 12px; border-radius:6px; cursor:pointer; font:inherit; font-size:.8rem;
+    text-transform:uppercase; letter-spacing:1px; transition:.2s; }
+  button:hover { background:rgba(41,230,255,.22); border-color:var(--cyan); color:#fff; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  button.stop { background:rgba(255,123,0,.2); border-color:var(--stop); }
+  button.rec { background:rgba(56,248,184,.25); border-color:var(--ok); }
+  .row { display:flex; gap:8px; width:100%; }
+  input { flex:1; background:rgba(0,0,0,.4); border:1px solid rgba(41,230,255,.35);
+    color:#dff8ff; padding:10px; border-radius:6px; font:inherit; min-width:0; }
+  #confirm { display:none; width:100%; border:1px solid var(--warn); border-radius:8px; padding:12px;
+    background:rgba(255,51,85,.1); text-align:center; flex-direction:column; gap:8px; }
+  #confirm.show { display:flex; }
+
+  .card { width:100%; border:1px solid rgba(41,230,255,.25); border-radius:8px;
+    background:rgba(5,15,32,.7); overflow:hidden; }
+  .card-h { display:flex; justify-content:space-between; align-items:center; gap:8px;
+    padding:8px 12px; background:rgba(22,119,255,.2); font-size:.8rem;
+    letter-spacing:2px; text-transform:uppercase; }
+  .card-b { padding:10px; }
+  iframe { display:block; width:100%; aspect-ratio:16/9; border:0; background:#000; }
+  .small { font-size:.72rem; opacity:.75; }
+
+  aside.card { position:sticky; top:16px; max-height:calc(100vh - 32px); display:flex; flex-direction:column; }
+  aside .card-b { overflow:auto; flex:1; }
+  #hist { list-style:none; display:flex; flex-direction:column; gap:6px; }
+  #hist li { border:1px solid rgba(41,230,255,.15); border-radius:6px; padding:6px 8px; font-size:.8rem; }
+  #hist .meta { font-size:.68rem; opacity:.65; word-break:break-word; }
+  .o-succeeded { color:var(--ok); } .o-failed { color:var(--warn); }
+  .o-interrupted, .o-cancelled { color:var(--stop); } .o-pending, .o-awaiting { color:var(--cyan); }
+
+  dialog { margin:auto; width:min(90vw,460px); border:1px solid var(--cyan); border-radius:8px;
+    padding:18px; background:#061327; color:#dff8ff; }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  dialog form { display:flex; flex-direction:column; gap:10px; }
+
+  @media (max-width:900px) { .layout { grid-template-columns:minmax(0,480px); }
+    aside.card { position:static; max-height:420px; } }
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <main class="main">
+    <div class="stage">
+      <canvas id="cv"></canvas>
+      <div class="center">
+        <div class="brand" id="brand">J.A.R.V.I.S</div>
+        <div class="tag" id="state">IDLE</div>
+      </div>
+    </div>
+
+    <div class="pos" id="pos">X: -- | Z: --</div>
+    <div class="net" id="net">disconnected</div>
+    <div class="speech" id="speech"></div>
+
+    <div id="confirm">
+      <div id="confirmText"></div>
+      <div class="row" style="justify-content:center">
+        <button id="yes">Yes</button><button id="no">No</button>
+      </div>
+    </div>
+
+    <div class="pad">
+      <span></span><button data-c="up">&#9650;</button><span></span>
+      <button data-c="left">&#9664;</button><button class="stop" data-i="stop">Stop</button><button data-c="right">&#9654;</button>
+      <button data-i="home">Home</button><button data-c="down">&#9660;</button><button data-i="pause">Pause</button>
+    </div>
+
+    <form class="row" id="form">
+      <input id="txt" placeholder="e.g. left 20 mm, faster, save point A" autocomplete="off">
+      <button type="submit">Send</button>
+      <button type="button" id="mic">Mic</button>
+    </form>
+
+    <div class="card">
+      <div class="card-h">
+        <span>Device view</span>
+        <button type="button" id="urlBtn" disabled>Change URL</button>
+      </div>
+      <div class="card-b">
+        <iframe id="cam" title="Device view"></iframe>
+        <p class="small" id="camStatus">Loading configuration...</p>
+      </div>
+    </div>
+  </main>
+
+  <aside class="card">
+    <div class="card-h"><span>Command history</span></div>
+    <div class="card-b">
+      <p class="small" id="histStatus">No commands yet.</p>
+      <ol id="hist"></ol>
+    </div>
+  </aside>
+</div>
+
+<dialog id="dlg">
+  <form id="urlForm">
+    <h3>Device view URL</h3>
+    <input id="urlInput" type="url" maxlength="2048" required placeholder="http://...">
+    <div class="row">
+      <button type="submit" id="urlSave">Save</button>
+      <button type="button" id="urlCancel">Cancel</button>
+    </div>
+    <p class="small" id="urlErr" style="color:var(--warn)"></p>
+  </form>
+</dialog>
+
+<script>
+/* ---------- Sphere ---------- */
+class Sphere {
+  constructor(cv, stateEl, brandEl) {
+    this.cv = cv; this.ctx = cv.getContext('2d'); this.stateEl = stateEl; this.brandEl = brandEl;
+    this.size = 360; const dpr = Math.min(devicePixelRatio || 1, 2);
+    cv.width = cv.height = this.size * dpr; this.ctx.scale(dpr, dpr);
+    this.c = this.size / 2; this.R = 116;
+    this.state = 'idle'; this.t = 0; this.energy = 0; this.target = 0; this.rx = .25; this.ry = 0;
+    this.cfg = {
+      idle:      { rgb:[41,230,255], sy:.0045, sx:.0015, jit:0,   wave:.05 },
+      listening: { rgb:[56,248,184], sy:.007,  sx:.003,  jit:1,   wave:.15 },
+      speaking:  { rgb:[41,230,255], sy:.006,  sx:.002,  jit:.15, wave:1   },
+      warning:   { rgb:[255,51,85],  sy:.002,  sx:.001,  jit:.55, wave:.35 },
+      stop:      { rgb:[255,123,0],  sy:0,     sx:0,     jit:.05, wave:0   }
+    };
+    this.rgb = [...this.cfg.idle.rgb];
+    this.pts = [];
+    const n = 320, ga = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < n; i++) {
+      const y = 1 - i / (n - 1) * 2, r = Math.sqrt(Math.max(0, 1 - y * y)), th = ga * i;
+      this.pts.push({ x:Math.cos(th) * r, y, z:Math.sin(th) * r, ph:i * .17,
+        a:Math.sin(i * 12.9898) * 43758.5453 % 1, b:Math.cos(i * 78.233) * 24634.6345 % 1 });
+    }
+    this.loop = this.loop.bind(this); requestAnimationFrame(this.loop);
+  }
+  setState(s) {
+    if (!this.cfg[s]) return; this.state = s; this.stateEl.textContent = s.toUpperCase();
+    const [r,g,b] = this.cfg[s].rgb; this.brandEl.style.textShadow = `0 0 14px rgba(${r},${g},${b},.85)`;
+  }
+  col(a) { const [r,g,b] = this.rgb.map(Math.round); return `rgba(${r},${g},${b},${a})`; }
+  loop() {
+    this.t++; const s = this.state, cfg = this.cfg[s];
+    this.target = s === 'speaking' ? .45 + .55 * Math.abs(Math.sin(this.t * .14) * Math.cos(this.t * .055))
+      : s === 'listening' ? .25 + .2 * Math.sin(this.t * .12)
+      : s === 'warning' ? .3 + .3 * Math.abs(Math.sin(this.t * .16)) : 0;
+    this.energy += (this.target - this.energy) * .16;
+    for (let i = 0; i < 3; i++) this.rgb[i] += (cfg.rgb[i] - this.rgb[i]) * .09;
+    this.ry += cfg.sy; this.rx += cfg.sx;
+    const cY = Math.cos(this.ry), sY = Math.sin(this.ry), cX = Math.cos(this.rx), sX = Math.sin(this.rx);
+    const br = Math.sin(this.t * .025) * 3, ctx = this.ctx, E = this.energy;
+    ctx.clearRect(0, 0, this.size, this.size);
+    const g = ctx.createRadialGradient(this.c, this.c, 10, this.c, this.c, this.R * 1.15);
+    g.addColorStop(0, this.col(.14 + E * .12)); g.addColorStop(1, this.col(0));
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(this.c, this.c, this.R * 1.15, 0, 6.2832); ctx.fill();
+    const out = [];
+    for (const p of this.pts) {
+      const wp = Math.max(0, Math.sin(p.y * 3.2 + p.x * 1.5 - this.t * .085));
+      const wb = Math.pow(wp, 2.2) * cfg.wave * (.35 + E * .85);
+      const ja = cfg.jit * (1.8 + E * 4.5);
+      const rs = this.R + br + wb * 14;
+      const vx = p.x * rs + ja * Math.sin(this.t * .65 + p.a * 50);
+      const vy = p.y * rs + ja * Math.cos(this.t * .72 + p.b * 50);
+      const vz = p.z * rs + ja * Math.sin(this.t * .58 + (p.a + p.b) * 30);
+      const x1 = vx * cY - vz * sY, z1 = vz * cY + vx * sY;
+      const y2 = vy * cX - z1 * sX, z2 = z1 * cX + vy * sX;
+      const sc = 300 / (300 + z2);
+      const dr = Math.max(.8, (2 + wb * 3 + (cfg.jit ? Math.sin(this.t * .25 + p.ph) * .9 * cfg.jit : 0) + E * .8) * sc);
+      const al = Math.max(.12, Math.min(.95, .16 + (z2 + rs) / (2 * rs) * .65 + wb * .25));
+      out.push([this.c + x1 * sc, this.c + y2 * sc, z2, dr, al]);
+    }
+    out.sort((a, b) => a[2] - b[2]);
+    for (const o of out) { ctx.fillStyle = this.col(o[4]); ctx.beginPath(); ctx.arc(o[0], o[1], o[3], 0, 6.2832); ctx.fill(); }
+    requestAnimationFrame(this.loop);
+  }
+}
+
+const $ = id => document.getElementById(id);
+const sphere = new Sphere($('cv'), $('state'), $('brand'));
+
+/* ---------- TTS ---------- */
+function say(text, warn) {
+  speechSynthesis.cancel();
+  if (!text) return;
+  const u = new SpeechSynthesisUtterance(text); u.lang = 'en-US';
+  u.onstart = () => sphere.setState('speaking');
+  u.onend = u.onerror = () => sphere.setState(warn ? 'warning' : 'idle');
+  speechSynthesis.speak(u);
+}
+
+/* ---------- History ---------- */
+const OUTCOME = { pending:'in progress', awaiting:'awaiting confirmation', succeeded:'done',
+  failed:'failed', interrupted:'interrupted', cancelled:'cancelled' };
+
+function renderHistory(events) {
+  $('histStatus').textContent = events.length ? '' : 'No commands yet.';
+  $('hist').replaceChildren(...events.map(ev => {
+    const li = document.createElement('li');
+    const h = document.createElement('strong');
+    h.className = 'o-' + ev.outcome;
+    h.textContent = `${ev.command} - ${OUTCOME[ev.outcome] || ev.outcome}`;
+    const m = document.createElement('div'); m.className = 'meta';
+    const src = ev.source.type === 'voice' ? `Voice: ${ev.source.data}`
+      : ev.source.type === 'text' ? `Text: ${ev.source.data}` : 'Button';
+    m.textContent = `${new Date(ev.timestamp).toLocaleTimeString()} | ${src}`;
+    li.append(h, m);
+    return li;
+  }));
+}
+
+/* ---------- WebSocket ---------- */
+let ws, pendingId = null;
+function connect() {
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/ws`);
+  ws.onopen = () => $('net').textContent = 'connected';
+  ws.onclose = () => { $('net').textContent = 'disconnected, reconnecting...'; setTimeout(connect, 2000); };
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'status') { $('pos').textContent = `X: ${m.x.toFixed(1)} | Z: ${m.z.toFixed(1)}`; return; }
+    if (m.type === 'history') { renderHistory(m.events); return; }
+    if (m.type === 'result') {
+      const sp = $('speech'); sp.textContent = m.speech; sp.classList.toggle('warn', !!m.warning);
+      if (m.confirm) { pendingId = m.id; $('confirmText').textContent = m.speech; $('confirm').classList.add('show'); }
+      else $('confirm').classList.remove('show');
+      if (m.action === 'stop') { speechSynthesis.cancel(); sphere.setState('stop'); setTimeout(() => sphere.setState('idle'), 1500); }
+      else say(m.speech, !!m.warning);
+    }
+  };
+}
+const send = o => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
+
+/* ---------- Controls ---------- */
+$('form').onsubmit = e => { e.preventDefault(); const v = $('txt').value.trim();
+  if (v) send({ type:'text', data:v, via:'text' }); $('txt').value = ''; };
+document.querySelectorAll('[data-c]').forEach(b => b.onclick = () => send({ type:'text', data:b.dataset.c, via:'button' }));
+document.querySelectorAll('[data-i]').forEach(b => b.onclick = () => send({ type:'instant', data:b.dataset.i }));
+function answer(ok) { $('confirm').classList.remove('show'); send({ type:'confirm', id:pendingId, ok }); pendingId = null; }
+$('yes').onclick = () => answer(true); $('no').onclick = () => answer(false);
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || $('dlg').open) return;
+  if (e.key === ' ' || e.key === 's') { e.preventDefault(); send({ type:'instant', data:'stop' }); }
+});
+
+/* ---------- Voice ---------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SR) {
+  const rec = new SR(); rec.lang = 'en-US'; rec.interimResults = false;
+  rec.onstart = () => { sphere.setState('listening'); $('mic').classList.add('rec'); };
+  rec.onend = () => { $('mic').classList.remove('rec'); if (sphere.state === 'listening') sphere.setState('idle'); };
+  rec.onresult = e => send({ type:'text', data:e.results[0][0].transcript, via:'voice' });
+  $('mic').onclick = () => { speechSynthesis.cancel(); try { rec.start(); } catch {} };
+} else $('mic').disabled = true;
+
+/* ---------- Camera / device view ---------- */
+let savedUrl = '';
+const okUrl = s => { try { const u = new URL(s);
+  return ['http:', 'https:'].includes(u.protocol) && !u.username && !u.password; } catch { return false; } };
+
+async function loadConfig() {
+  try {
+    const r = await fetch('/configuration');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const c = await r.json();
+    if (!okUrl(c.iframe_url)) throw new Error('invalid URL');
+    savedUrl = c.iframe_url; $('cam').src = savedUrl;
+    $('urlBtn').disabled = false; $('camStatus').textContent = '';
+  } catch (err) { $('camStatus').textContent = 'Could not load configuration: ' + err.message; }
+}
+$('urlBtn').onclick = () => { $('urlInput').value = savedUrl; $('urlErr').textContent = ''; $('dlg').showModal(); };
+$('urlCancel').onclick = () => $('dlg').close();
+$('urlForm').onsubmit = async e => {
+  e.preventDefault();
+  const v = $('urlInput').value;
+  if (!okUrl(v)) { $('urlErr').textContent = 'Enter an HTTP or HTTPS URL without credentials.'; return; }
+  $('urlSave').disabled = true;
+  try {
+    const r = await fetch('/configuration', { method:'PATCH',
+      headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ iframe_url:v }) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    savedUrl = (await r.json()).iframe_url; $('cam').src = savedUrl; $('dlg').close();
+  } catch (err) { $('urlErr').textContent = 'Could not save URL: ' + err.message; }
+  finally { $('urlSave').disabled = false; }
+};
+
+connect();
+loadConfig();
+</script>
+</body>
+</html>

@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="de" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lenze Robot Control</title>
+    <link rel="icon" href="./favicon.ico" type="image/x-icon">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@6.0.0-alpha.1/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-B/GM4XqrwHnWXNOWMbloTmrYXZg10cakYGmpfsR/bbzQ6JAJI4ihuyADKLnBgrCe" crossorigin="anonymous">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body {
+            display: flex;
+            align-items: center;
+            align-content: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+            padding: 1rem;
+            min-height: 100vh;
+            background: radial-gradient(circle at 50% 40%, #0a1f3d 0%, #040d1d 55%, #030914 100%);
+        }
+        .sphere-stage {
+            position: relative;
+            width: 320px;
+            height: 320px;
+            max-width: 100%;
+            margin: 0 auto 1rem;
+        }
+        .sphere-stage canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .sphere-center {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            user-select: none;
+            text-align: center;
+        }
+        .sphere-brand {
+            font-size: 1rem;
+            font-weight: 700;
+            letter-spacing: 5px;
+            color: #e8fbff;
+            text-shadow: 0 0 14px rgba(41, 230, 255, 0.8);
+        }
+        .sphere-state {
+            margin-top: 4px;
+            font-size: 0.62rem;
+            letter-spacing: 3px;
+            opacity: 0.75;
+        }
+        .card {
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+            flex: 0 1 500px;
+            width: 100%;
+            max-width: 500px;
+        }
+        .device-view {
+            display: block;
+            width: 100%;
+            height: auto;
+            aspect-ratio: 16 / 9;
+            border: 0;
+        }
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .btn.loading {
+            pointer-events: none;
+        }
+        #text-command-spinner[hidden] {
+            display: none !important;
+        }
+        .btn.command-active {
+            box-shadow: 0 0 0 4px #ffc107;
+        }
+        [data-kasten-only][hidden] {
+            display: none !important;
+        }
+        #configuration-retry[hidden] {
+            display: none !important;
+        }
+        .settings-dialog {
+            width: min(90vw, 480px);
+            border: 0;
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+        }
+        .image-marquee {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            overflow: hidden;
+            pointer-events: none;
+        }
+        .image-marquee img {
+            display: block;
+            width: 64px;
+            animation: marquee 12s linear infinite;
+        }
+        @keyframes marquee {
+            from { transform: translateX(100vw); }
+            to { transform: translateX(-100%); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .image-marquee {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="card-header bg-primary text-white d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <h5 class="card-title mb-0">Lenze Roboter Steuerung</h5>
+            <label class="visually-hidden" for="device-type">Gerätetyp</label>
+            <select class="form-select form-select-sm w-auto" id="device-type" disabled>
+                <option value="kasten">Kasten</option>
+                <option value="raeder">Räder</option>
+            </select>
+        </div>
+        <div class="card-body">
+            <p class="card-text">
+                Willkommen zur Roboter-Steuerungsoberfläche. 
+            </p>
+            <div class="sphere-stage" aria-hidden="true">
+                <canvas id="sphereCanvas"></canvas>
+                <div class="sphere-center">
+                    <div class="sphere-brand" id="sphereBrand">J.A.R.V.I.S</div>
+                    <div class="sphere-state" id="sphereState">IDLE</div>
+                </div>
+            </div>
+            <p class="small mb-1" id="configuration-status" role="status">Konfiguration wird geladen...</p>
+            <button type="button" class="btn btn-sm btn-outline-secondary mb-2" id="configuration-retry" hidden>Erneut laden</button>
+            <p class="text-center mb-0" id="position">X: -- | Z: --</p>
+            <p class="text-center text-muted small mb-2" id="status">Verbindung wird hergestellt...</p>
+            <div class="d-flex justify-content-center">
+                <div style="width: 240px;">
+                    <!-- Row 1 -->
+                    <div class="d-grid gap-2 mb-2" style="grid-template-columns: 1fr 1fr 1fr;">
+                        <div></div>
+                        <button class="btn btn-primary rounded-pill p-3" data-command="move_up">
+                            <i class="bi bi-arrow-up" style="font-size: 1.5rem;"></i>
+                        </button>
+                        <div></div>
+                    </div>
+                    
+                    <!-- Row 2 -->
+                    <div class="d-grid gap-2 mb-2" style="grid-template-columns: 1fr 1fr 1fr;">
+                        <button class="btn btn-primary rounded-pill p-3" data-command="move_left">
+                            <i class="bi bi-arrow-left" style="font-size: 1.5rem;"></i>
+                        </button>
+                        <button class="btn btn-danger rounded-pill p-3" data-command="stop">
+                            <i class="bi bi-stop-fill" style="font-size: 1.5rem;"></i>
+                        </button>
+                        <button class="btn btn-primary rounded-pill p-3" data-command="move_right">
+                            <i class="bi bi-arrow-right" style="font-size: 1.5rem;"></i>
+                        </button>
+                    </div>
+                    
+                    <!-- Row 3 -->
+                    <div class="d-grid gap-2" style="grid-template-columns: 1fr 1fr 1fr;">
+                        <div></div>
+                        <button class="btn btn-primary rounded-pill p-3" data-command="move_down">
+                            <i class="bi bi-arrow-down" style="font-size: 1.5rem;"></i>
+                        </button>
+                        <div></div>
+                    </div>
+                </div>
+            </div>
+            <p class="text-center small mb-0" id="hidden-command" aria-live="polite"></p>
+        </div>
+        <div class="card-footer text-muted">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <small>Version 1.0 | Lenze AI Robot</small>
+                <button type="button" class="btn btn-primary btn-sm rounded-pill" data-command="home" data-kasten-only hidden>
+                    <i class="bi bi-house" aria-hidden="true"></i> Home
+                </button>
+            </div>
+            <small class="d-block mt-2">Ein Gerätetyp-Wechsel stoppt keine Bewegung.</small>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header bg-primary text-white">
+            <h5 class="card-title mb-0">Befehlsverlauf</h5>
+        </div>
+        <div class="card-body">
+            <p class="small text-danger" id="history-warning" role="alert"></p>
+            <p class="small" id="history-status" role="status">Verlauf wird geladen...</p>
+            <ol class="list-group list-group-numbered" id="command-history"></ol>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header bg-primary text-white">
+            <h5 class="card-title mb-0">Textbefehl</h5>
+        </div>
+        <div class="card-body">
+            <form id="text-command-form">
+                <label class="form-label" for="text-command">Befehl</label>
+                <textarea class="form-control" id="text-command" rows="4" aria-describedby="text-command-hint" required></textarea>
+                <p class="form-text mb-3" id="text-command-hint">Strg + Eingabe zum Senden</p>
+                <button class="btn btn-primary" type="submit">
+                    <span class="spinner-border spinner-border-sm me-1" id="text-command-spinner" aria-hidden="true" hidden></span>Senden
+                </button>
+                <p class="small mt-2 mb-0" id="text-command-status" role="status"></p>
+            </form>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center gap-2">
+            <h5 class="card-title mb-0">Geräteansicht</h5>
+            <button type="button" class="btn btn-light btn-sm" id="iframe-edit" disabled>URL ändern</button>
+        </div>
+        <div class="card-body">
+            <iframe class="device-view" id="device-frame" title="Geräteansicht"></iframe>
+        </div>
+    </div>
+
+    <dialog class="settings-dialog" id="iframe-dialog" aria-labelledby="iframe-dialog-title">
+        <form id="iframe-form">
+            <h5 id="iframe-dialog-title">URL der Geräteansicht</h5>
+            <label class="form-label" for="iframe-url">URL (HTTP oder HTTPS)</label>
+            <input class="form-control mb-3" id="iframe-url" type="url" maxlength="2048" required>
+            <button type="submit" class="btn btn-primary">Speichern</button>
+            <button type="button" class="btn btn-secondary" id="iframe-cancel">Abbrechen</button>
+            <button type="button" class="btn btn-danger" data-command="stop">Stop</button>
+            <p class="small text-danger mt-2 mb-0" id="iframe-error" role="alert"></p>
+        </form>
+    </dialog>
+
+    <div class="image-marquee" aria-hidden="true">
+        <img src="./images/BlauerPacman.gif" alt="">
+    </div>
+
+    <script type="module" src="https://cdn.jsdelivr.net/npm/bootstrap@6.0.0-alpha.1/dist/js/bootstrap.bundle.min.js" integrity="sha384-1a/pXj49ZQ1aHEmrJ+gMw1otqoVsYwlEnlD8mIfY2TV03r20Y0CN7uqx1tQogjPL" crossorigin="anonymous"></script>
+    <script>
+        const COMMANDS = ["home", "move_right", "move_up", "move_left", "move_down", "stop"];
+
+        /* ---------- J.A.R.V.I.S. sphere (from test_002.html) ---------- */
+        class Sphere {
+            constructor(cv, stateEl, brandEl) {
+                this.ctx = cv.getContext("2d");
+                this.stateEl = stateEl;
+                this.brandEl = brandEl;
+                this.size = 320;
+                const dpr = Math.min(window.devicePixelRatio || 1, 2);
+                cv.width = cv.height = this.size * dpr;
+                this.ctx.scale(dpr, dpr);
+                this.c = this.size / 2;
+                this.R = 104;
+                this.state = "idle";
+                this.t = 0; this.energy = 0; this.target = 0; this.rx = 0.25; this.ry = 0;
+                this.cfg = {
+                    idle:      { rgb: [41, 230, 255], sy: 0.0045, sx: 0.0015, jit: 0,    wave: 0.05 },
+                    listening: { rgb: [56, 248, 184], sy: 0.007,  sx: 0.003,  jit: 1,    wave: 0.15 },
+                    speaking:  { rgb: [41, 230, 255], sy: 0.006,  sx: 0.002,  jit: 0.15, wave: 1 },
+                    warning:   { rgb: [255, 51, 85],  sy: 0.002,  sx: 0.001,  jit: 0.55, wave: 0.35 },
+                    stop:      { rgb: [255, 123, 0],  sy: 0,      sx: 0,      jit: 0.05, wave: 0 },
+                };
+                this.rgb = [...this.cfg.idle.rgb];
+                this.pts = [];
+                const n = 300, ga = Math.PI * (3 - Math.sqrt(5));
+                for (let i = 0; i < n; i++) {
+                    const y = 1 - i / (n - 1) * 2, r = Math.sqrt(Math.max(0, 1 - y * y)), th = ga * i;
+                    this.pts.push({ x: Math.cos(th) * r, y, z: Math.sin(th) * r, ph: i * 0.17,
+                        a: Math.sin(i * 12.9898) * 43758.5453 % 1, b: Math.cos(i * 78.233) * 24634.6345 % 1 });
+                }
+                this.loop = this.loop.bind(this);
+                requestAnimationFrame(this.loop);
+            }
+            setState(s) {
+                if (!this.cfg[s] || s === this.state) return;
+                this.state = s;
+                this.stateEl.textContent = s.toUpperCase();
+                const [r, g, b] = this.cfg[s].rgb;
+                this.brandEl.style.textShadow = `0 0 14px rgba(${r},${g},${b},0.85)`;
+            }
+            col(a) { const [r, g, b] = this.rgb.map(Math.round); return `rgba(${r},${g},${b},${a})`; }
+            loop() {
+                this.t++;
+                const s = this.state, cfg = this.cfg[s], ctx = this.ctx;
+                this.target = s === "speaking" ? 0.45 + 0.55 * Math.abs(Math.sin(this.t * 0.14) * Math.cos(this.t * 0.055))
+                    : s === "listening" ? 0.25 + 0.2 * Math.sin(this.t * 0.12)
+                    : s === "warning" ? 0.3 + 0.3 * Math.abs(Math.sin(this.t * 0.16)) : 0;
+                this.energy += (this.target - this.energy) * 0.16;
+                for (let i = 0; i < 3; i++) this.rgb[i] += (cfg.rgb[i] - this.rgb[i]) * 0.09;
+                this.ry += cfg.sy; this.rx += cfg.sx;
+                const cY = Math.cos(this.ry), sY = Math.sin(this.ry), cX = Math.cos(this.rx), sX = Math.sin(this.rx);
+                const br = Math.sin(this.t * 0.025) * 3, E = this.energy;
+                ctx.clearRect(0, 0, this.size, this.size);
+                const g = ctx.createRadialGradient(this.c, this.c, 10, this.c, this.c, this.R * 1.15);
+                g.addColorStop(0, this.col(0.14 + E * 0.12)); g.addColorStop(1, this.col(0));
+                ctx.fillStyle = g; ctx.beginPath(); ctx.arc(this.c, this.c, this.R * 1.15, 0, 6.2832); ctx.fill();
+                const out = [];
+                for (const p of this.pts) {
+                    const wp = Math.max(0, Math.sin(p.y * 3.2 + p.x * 1.5 - this.t * 0.085));
+                    const wb = Math.pow(wp, 2.2) * cfg.wave * (0.35 + E * 0.85);
+                    const ja = cfg.jit * (1.8 + E * 4.5);
+                    const rs = this.R + br + wb * 14;
+                    const vx = p.x * rs + ja * Math.sin(this.t * 0.65 + p.a * 50);
+                    const vy = p.y * rs + ja * Math.cos(this.t * 0.72 + p.b * 50);
+                    const vz = p.z * rs + ja * Math.sin(this.t * 0.58 + (p.a + p.b) * 30);
+                    const x1 = vx * cY - vz * sY, z1 = vz * cY + vx * sY;
+                    const y2 = vy * cX - z1 * sX, z2 = z1 * cX + vy * sX;
+                    const sc = 300 / (300 + z2);
+                    const dr = Math.max(0.8, (2 + wb * 3 + (cfg.jit ? Math.sin(this.t * 0.25 + p.ph) * 0.9 * cfg.jit : 0) + E * 0.8) * sc);
+                    const al = Math.max(0.12, Math.min(0.95, 0.16 + (z2 + rs) / (2 * rs) * 0.65 + wb * 0.25));
+                    out.push([this.c + x1 * sc, this.c + y2 * sc, z2, dr, al]);
+                }
+                out.sort((a, b) => a[2] - b[2]);
+                for (const o of out) {
+                    ctx.fillStyle = this.col(o[4]); ctx.beginPath(); ctx.arc(o[0], o[1], o[3], 0, 6.2832); ctx.fill();
+                }
+                requestAnimationFrame(this.loop);
+            }
+        }
+
+        const sphere = new Sphere(
+            document.getElementById("sphereCanvas"),
+            document.getElementById("sphereState"),
+            document.getElementById("sphereBrand"));
+        let baseState = "idle", flashTimer = null;
+        function setBase(s) { baseState = s; if (!flashTimer) sphere.setState(s); }
+        function flash(s, ms) {
+            sphere.setState(s);
+            clearTimeout(flashTimer);
+            flashTimer = setTimeout(() => { flashTimer = null; sphere.setState(baseState); }, ms);
+        }
+        
+        async function executeInstantCommand(command) {
+            if (!COMMANDS.includes(command)) {
+                console.error(`Invalid command: ${command}`);
+                return;
+            }
+            
+            if (command === "stop") flash("stop", 1500);
+            try {
+                const response = await fetch("/command", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        inputType: "instantCommand",
+                        data: command,
+                    }),
+                });
+                
+                if (!response.ok) {
+                    console.error(`Command execution failed: ${response.status} ${response.statusText}`);
+                    flash("warning", 2500);
+                    return;
+                }
+                
+                const result = await response.json();
+                if (result.history_warning) {
+                    document.getElementById("history-warning").textContent =
+                        "Befehl gesendet, aber der Verlauf konnte nicht gespeichert werden.";
+                }
+                console.log(`Command executed: ${command}`, result);
+            } catch (error) {
+                console.error(`Error executing command: ${error}`);
+                flash("warning", 2500);
+            }
+        }
+        
+        document.addEventListener("DOMContentLoaded", function() {
+            const textForm = document.getElementById("text-command-form");
+            const textInput = document.getElementById("text-command");
+            const textStatus = document.getElementById("text-command-status");
+            const textSubmit = textForm.querySelector('button[type="submit"]');
+            const textSpinner = document.getElementById("text-command-spinner");
+            const historyList = document.getElementById("command-history");
+            const historyStatus = document.getElementById("history-status");
+
+            async function refreshHistory() {
+                try {
+                    const response = await fetch("/command-history");
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    const events = await response.json();
+                    const items = events.map(event => {
+                        const item = document.createElement("li");
+                        item.className = "list-group-item";
+                        const heading = document.createElement("strong");
+                        heading.textContent = `${event.command} — ${{
+                            pending: "in Bearbeitung", succeeded: "ausgeführt",
+                            failed: "fehlgeschlagen", interrupted: "unterbrochen",
+                        }[event.outcome] || event.outcome}`;
+                        const details = document.createElement("div");
+                        details.className = "small text-break";
+                        const date = new Date(event.timestamp);
+                        const source = event.source.inputType === "text"
+                            ? `Text: ${event.source.data}`
+                            : event.source.inputType === "instantCommand"
+                                ? "Direktbefehl"
+                                : `Punkte: ${JSON.stringify(event.source.points)}`;
+                        details.textContent = `${date.toLocaleString()} | ${source}`;
+                        item.append(heading, details);
+                        return item;
+                    });
+                    historyList.replaceChildren(...items);
+                    historyStatus.classList.remove("text-danger");
+                    historyStatus.textContent = events.length ? "" : "Noch keine Befehle.";
+                } catch (error) {
+                    console.error("Could not load command history", error);
+                    historyStatus.classList.add("text-danger");
+                    historyStatus.textContent = `Verlauf konnte nicht geladen werden: ${error.message}`;
+                } finally {
+                    setTimeout(refreshHistory, 2000);
+                }
+            }
+
+            refreshHistory();
+
+            textInput.addEventListener("keydown", function(e) {
+                if (e.key === "Enter" && e.ctrlKey && !e.altKey && !e.metaKey &&
+                    !e.shiftKey && !e.isComposing) {
+                    e.preventDefault();
+                    if (!e.repeat && !textSubmit.disabled) {
+                        textForm.requestSubmit(textSubmit);
+                    }
+                }
+            });
+
+            textForm.addEventListener("submit", async function(e) {
+                e.preventDefault();
+                if (textSubmit.disabled) {
+                    return;
+                }
+                const text = textInput.value;
+                if (!text.trim()) {
+                    textStatus.classList.add("text-danger");
+                    textStatus.textContent = "Bitte einen Befehl eingeben.";
+                    return;
+                }
+
+                textSubmit.disabled = true;
+                textSubmit.setAttribute("aria-busy", "true");
+                textSpinner.hidden = false;
+                textStatus.classList.remove("text-danger");
+                textStatus.textContent = "Befehl wird verarbeitet...";
+                flash("listening", 30000);
+                try {
+                    const response = await fetch("/command", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({inputType: "text", data: text}),
+                    });
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    const result = await response.json();
+                    if (result.history_warning) {
+                        document.getElementById("history-warning").textContent =
+                            "Befehl gesendet, aber der Verlauf konnte nicht gespeichert werden.";
+                    }
+                    if (textInput.value === text) {
+                        textInput.value = "";
+                    }
+                    textStatus.textContent = "Befehl gesendet.";
+                    flash("speaking", 1200);
+                } catch (error) {
+                    console.error("Text command failed", error);
+                    textStatus.classList.add("text-danger");
+                    textStatus.textContent = `Befehl konnte nicht gesendet werden: ${error.message}`;
+                    flash("warning", 2500);
+                } finally {
+                    textSpinner.hidden = true;
+                    textSubmit.removeAttribute("aria-busy");
+                    textSubmit.disabled = false;
+                }
+            });
+
+            const deviceType = document.getElementById("device-type");
+            const hiddenCommand = document.getElementById("hidden-command");
+            const configurationStatus = document.getElementById("configuration-status");
+            const configurationRetry = document.getElementById("configuration-retry");
+            const iframeEdit = document.getElementById("iframe-edit");
+            const iframeDialog = document.getElementById("iframe-dialog");
+            const iframeForm = document.getElementById("iframe-form");
+            const iframeUrl = document.getElementById("iframe-url");
+            const iframeError = document.getElementById("iframe-error");
+            const iframeSave = iframeForm.querySelector('button[type="submit"]');
+            const iframeCancel = document.getElementById("iframe-cancel");
+            const deviceFrame = document.getElementById("device-frame");
+            let configurationLoaded = false;
+            let savedDeviceType;
+            let savedIframeUrl;
+
+            function updateHiddenCommand() {
+                const activeButton = document.querySelector("[data-command].command-active");
+                hiddenCommand.textContent = activeButton && activeButton.closest("[hidden]")
+                    ? `Aktiver Befehl: ${activeButton.dataset.command}`
+                    : "";
+            }
+
+            function updateDeviceType() {
+                document.querySelectorAll("[data-kasten-only]").forEach(element => {
+                    element.hidden = !configurationLoaded || deviceType.value === "raeder";
+                });
+                updateHiddenCommand();
+            }
+
+            async function saveConfiguration(changes) {
+                const response = await fetch("/configuration", {
+                    method: "PATCH",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify(changes),
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                return await response.json();
+            }
+
+            async function loadConfiguration() {
+                configurationLoaded = false;
+                deviceType.disabled = true;
+                iframeEdit.disabled = true;
+                configurationRetry.hidden = true;
+                configurationStatus.classList.remove("text-danger");
+                configurationStatus.textContent = "Konfiguration wird geladen...";
+                updateDeviceType();
+                try {
+                    const response = await fetch("/configuration");
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    const configuration = await response.json();
+                    const url = new URL(configuration.iframe_url);
+                    if (!["kasten", "raeder"].includes(configuration.device_type) ||
+                        !["http:", "https:"].includes(url.protocol) || url.username || url.password) {
+                        throw new Error("Ungültige Konfiguration");
+                    }
+                    savedDeviceType = configuration.device_type;
+                    savedIframeUrl = configuration.iframe_url;
+                    deviceType.value = savedDeviceType;
+                    deviceFrame.src = savedIframeUrl;
+                    configurationLoaded = true;
+                    deviceType.disabled = false;
+                    iframeEdit.disabled = false;
+                    configurationStatus.textContent = "";
+                    updateDeviceType();
+                } catch (error) {
+                    console.error("Could not load configuration", error);
+                    configurationStatus.classList.add("text-danger");
+                    configurationStatus.textContent = `Konfiguration konnte nicht geladen werden: ${error.message}`;
+                    configurationRetry.hidden = false;
+                }
+            }
+
+            configurationRetry.addEventListener("click", loadConfiguration);
+            deviceType.addEventListener("change", async function() {
+                const selected = deviceType.value;
+                deviceType.disabled = true;
+                configurationStatus.classList.remove("text-danger");
+                configurationStatus.textContent = "Gerätetyp wird gespeichert...";
+                updateDeviceType();
+                try {
+                    const configuration = await saveConfiguration({device_type: selected});
+                    savedDeviceType = configuration.device_type;
+                    deviceType.value = savedDeviceType;
+                    configurationStatus.textContent = "";
+                } catch (error) {
+                    console.error("Could not save device type", error);
+                    deviceType.value = savedDeviceType;
+                    configurationStatus.classList.add("text-danger");
+                    configurationStatus.textContent = `Gerätetyp konnte nicht gespeichert werden: ${error.message}`;
+                } finally {
+                    deviceType.disabled = false;
+                    updateDeviceType();
+                }
+            });
+
+            iframeEdit.addEventListener("click", function() {
+                iframeUrl.value = savedIframeUrl;
+                iframeError.textContent = "";
+                iframeDialog.showModal();
+            });
+            iframeCancel.addEventListener("click", () => iframeDialog.close());
+            iframeDialog.addEventListener("cancel", function(e) {
+                if (iframeSave.disabled) {
+                    e.preventDefault();
+                }
+            });
+            iframeForm.addEventListener("submit", async function(e) {
+                e.preventDefault();
+                if (iframeSave.disabled) {
+                    return;
+                }
+                const url = new URL(iframeUrl.value);
+                if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
+                    iframeError.textContent = "Bitte eine HTTP- oder HTTPS-URL ohne Zugangsdaten eingeben.";
+                    return;
+                }
+                iframeSave.disabled = true;
+                iframeCancel.disabled = true;
+                iframeUrl.disabled = true;
+                iframeError.textContent = "";
+                try {
+                    const configuration = await saveConfiguration({iframe_url: iframeUrl.value});
+                    savedIframeUrl = configuration.iframe_url;
+                    deviceFrame.src = savedIframeUrl;
+                    iframeDialog.close();
+                } catch (error) {
+                    console.error("Could not save iframe URL", error);
+                    iframeError.textContent = `URL konnte nicht gespeichert werden: ${error.message}`;
+                } finally {
+                    iframeSave.disabled = false;
+                    iframeCancel.disabled = false;
+                    iframeUrl.disabled = false;
+                }
+            });
+
+            loadConfiguration();
+
+            document.querySelectorAll("[data-command]").forEach(button => {
+                button.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    const command = this.getAttribute("data-command");
+                    this.disabled = true;
+                    this.classList.add("loading");
+                    
+                    executeInstantCommand(command).finally(() => {
+                        this.disabled = false;
+                        this.classList.remove("loading");
+                    });
+                });
+            });
+
+            const keyboardCommands = new Map([
+                ["ArrowUp", "move_up"],
+                ["ArrowLeft", "move_left"],
+                ["ArrowRight", "move_right"],
+                ["ArrowDown", "move_down"],
+                ["h", "home"],
+                ["s", "stop"],
+            ]);
+
+            document.addEventListener("keydown", function(e) {
+                if (e.ctrlKey || e.altKey || e.metaKey || e.isComposing || iframeDialog.open ||
+                    (e.target instanceof HTMLElement &&
+                        (e.target.isContentEditable || e.target.closest("input, textarea, select")))) {
+                    return;
+                }
+
+                const command = keyboardCommands.get(e.key.length === 1 ? e.key.toLowerCase() : e.key);
+                if (!command) {
+                    return;
+                }
+                const button = document.querySelector(`[data-command="${command}"]`);
+                if (button.closest("[hidden]")) {
+                    return;
+                }
+                e.preventDefault();
+                if (!e.repeat) {
+                    button.click();
+                }
+            });
+
+            const position = document.getElementById("position");
+            const status = document.getElementById("status");
+            const buttons = document.querySelectorAll("[data-command]");
+
+            function clearStatus(message) {
+                buttons.forEach(button => button.classList.remove("command-active"));
+                updateHiddenCommand();
+                position.textContent = "X: -- | Z: --";
+                status.textContent = message;
+                setBase("warning");
+            }
+
+            function connectStatus() {
+                if (!["http:", "https:"].includes(window.location.protocol)) {
+                    clearStatus("Status nur über den Webserver verfügbar.");
+                    return;
+                }
+                const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+                const socket = new WebSocket(`${protocol}//${window.location.host}/ws/status`);
+
+                socket.addEventListener("message", function(event) {
+                    let state;
+                    try {
+                        state = JSON.parse(event.data);
+                    } catch (error) {
+                        console.error("Invalid status message", error);
+                        clearStatus("Ungültige Statusmeldung.");
+                        return;
+                    }
+                    buttons.forEach(button => {
+                        button.classList.toggle("command-active", button.dataset.command === state.command);
+                    });
+                    updateHiddenCommand();
+                    setBase(state.command && state.command !== "stop" ? "speaking" : "idle");
+                    if (state.position && Number.isFinite(state.position.x) && Number.isFinite(state.position.z)) {
+                        position.textContent = `X: ${state.position.x.toFixed(2)} | Z: ${state.position.z.toFixed(2)}`;
+                        status.textContent = "";
+                    } else {
+                        position.textContent = "X: -- | Z: --";
+                        status.textContent = "Position nicht verfügbar.";
+                    }
+                });
+                socket.addEventListener("error", function() {
+                    console.error("Status WebSocket connection failed");
+                });
+                socket.addEventListener("close", function() {
+                    clearStatus("Statusverbindung getrennt. Erneuter Verbindungsversuch...");
+                    setTimeout(connectStatus, 2000);
+                });
+            }
+
+            connectStatus();
+        });
+    </script>
+</body>
+</html>

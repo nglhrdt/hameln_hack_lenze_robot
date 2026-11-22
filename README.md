@@ -71,6 +71,10 @@ From another device, replace `localhost` with the API machine's IP address.
 Microphone access requires HTTPS or localhost in most browsers. The page's
 command API URL is configurable in its settings.
 
+Use a card's expand icon to open it as an overlay; use the restore icon, Escape,
+or the backdrop to return to the grid. A stop button is available in the
+expanded card header.
+
 Use the arrow keys for movement, `H` for home, and `S` for stop. Releasing a
 movement key does not stop the robot; use the stop control.
 The header selects a Kasten or Räder interface; Räder hides the home control
@@ -83,6 +87,16 @@ use the send button or Ctrl+Enter. The optional Schrittweite field applies to
 both text and directional commands. Leave it empty for continuous movement
 unless the text specifies a distance; zero does not start a jog. Stop remains
 available even if the field is invalid.
+
+The Sprachbefehl card starts German speech recognition with the microphone
+button. Click it again to stop and immediately send the final transcript as a
+text command; this can move the robot. Speech recognition requires a browser
+that supports on-device Web Speech recognition, microphone permission, and
+HTTPS or localhost. The first use may download a German language pack; start
+the recording again after installation. Audio is processed on the device, but
+the transcript is sent to the command API, interpreted using its configured AI
+service, and may be saved in command history. Errors and unrecognized speech do
+not send a command. If sending fails, check robot status before retrying.
 
 The Befehlsverlauf card loads the latest 10 API commands on connection, then
 receives new commands and outcome updates over the status WebSocket. It retains
