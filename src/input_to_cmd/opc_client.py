@@ -62,6 +62,7 @@ class ProfilePoint:
     halt: bool
 
 
+ZERO_PROFILE_POINT = ProfilePoint(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, False)
 DEFAULT_PATH_VEL = 350.0
 DEFAULT_PATH_ACC = 1000.0
 DEFAULT_PATH_DEC = 1000.0
@@ -80,11 +81,7 @@ async def write_xz_points(points: Sequence[tuple[float, float]]) -> None:
 
 
 async def write_points(points: Sequence[ProfilePoint]) -> None:
-    """Write points to the start of the profile array, then execute the path.
-
-    Only the supplied elements are written (OPC UA index range); the rest of
-    the array is not sent.
-    """
+    """Write points and zero-fill the remaining profile array, then execute the path."""
     bodies = []
     for point in points:
         values = (
@@ -126,6 +123,12 @@ async def write_points(points: Sequence[ProfilePoint]) -> None:
             raise ValueError(
                 f"Expected at most {len(current)} profile points, received {len(bodies)}"
             )
+        zero = ZERO_PROFILE_POINT
+        zero_body = struct.pack(
+            "<6d?", zero.x_pos, zero.z_pos, zero.path_vel, zero.path_acc,
+            zero.path_dec, zero.blending_radius, zero.halt,
+        )
+        bodies.extend([zero_body] * (len(current) - len(bodies)))
 
         data_type = client.get_node(data_type_id)
         encodings = await data_type.get_references(

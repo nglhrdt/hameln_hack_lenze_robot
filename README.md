@@ -139,9 +139,9 @@ robot can travel beyond the requested distance before the jog is stopped.
 The text-command API does not provide a step size.
 
 The OPC client also provides `await write_points(points)` for writing to the
-`g_ascPointBuffer` array. The points are written in order to the first array
-elements using an OPC UA index range (for example `0:5`); the remaining
-elements are not sent, so the device keeps whatever it already holds there.
+`g_ascProfilePar` array. The points are written in order to the first array
+elements using an OPC UA index range (for example `0:5`); remaining elements
+are filled with `ZERO_PROFILE_POINT` (zero numeric fields and `halt=False`).
 The device must support index-range writes on this array; otherwise the write
 fails and the path is not executed. More points than the array holds raise
 `ValueError`.

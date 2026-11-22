@@ -92,7 +92,19 @@ class ProfileWriteTests(unittest.IsolatedAsyncioTestCase):
             for item in value.Value
         ]
 
-    async def test_shorter_array_writes_only_supplied_elements(self):
+    async def test_shorter_array_zero_fills_remaining_elements(self):
+        self.node.read_value.return_value = self.existing * 2
+        await opc_client.write_points(self.points[:1])
+        self.assertEqual(self.node.write_attribute.await_args.args[2], "0:3")
+        self.assertEqual(self._written_points(), [
+            self.points[0], opc_client.ZERO_PROFILE_POINT, opc_client.ZERO_PROFILE_POINT,
+            opc_client.ZERO_PROFILE_POINT,
+        ])
+        value = self.node.write_attribute.await_args.args[1].Value
+        self.assertEqual([item.Body for item in value.Value[1:]], [bytes(49)] * 3)
+
+    async def test_single_element_array_uses_single_index(self):
+        self.node.read_value.return_value = self.existing[:1]
         await opc_client.write_points(self.points[:1])
         self.assertEqual(self.node.write_attribute.await_args.args[2], "0")
         self.assertEqual(self._written_points(), [self.points[0]])
@@ -110,6 +122,7 @@ class ProfileWriteTests(unittest.IsolatedAsyncioTestCase):
                 30, 20, opc_client.DEFAULT_PATH_VEL, opc_client.DEFAULT_PATH_ACC,
                 opc_client.DEFAULT_PATH_DEC, opc_client.DEFAULT_BLENDING_RADIUS, False,
             ),
+            opc_client.ZERO_PROFILE_POINT,
         ])
 
     async def test_rejects_wrong_data_type(self):
@@ -148,6 +161,7 @@ class ProfileWriteTests(unittest.IsolatedAsyncioTestCase):
             [opc_client.ProfilePoint(float("nan"), 0, 0, 0, 0, 0, False)],
             [opc_client.ProfilePoint(50, 50, 0, 0, 0, 0, 1)],
             [opc_client.ProfilePoint("50", 50, 0, 0, 0, 0, False)],
+            [opc_client.ZERO_PROFILE_POINT],
         ):
             with self.subTest(points=points), self.assertRaises(ValueError):
                 await opc_client.write_points(points)
