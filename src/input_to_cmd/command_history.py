@@ -31,6 +31,14 @@ class CommandHistory:
                     outcome TEXT NOT NULL
                 )
             """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS command_sequences (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    event_ids TEXT NOT NULL,
+                    points TEXT NOT NULL
+                )
+            """)
         except BaseException:
             db.close()
             raise
@@ -58,11 +66,11 @@ class CommandHistory:
         with closing(self._connect()) as db, db:
             db.execute("UPDATE command_history SET outcome = ? WHERE id = ?", (outcome, event_id))
 
-    def read(self) -> list[dict[str, Any]]:
+    def read(self, limit: int = 100) -> list[dict[str, Any]]:
         with closing(self._connect()) as db:
             rows = db.execute(
                 "SELECT id, timestamp, command, source, points, outcome "
-                "FROM command_history ORDER BY timestamp DESC, id DESC LIMIT 100"
+                "FROM command_history ORDER BY timestamp DESC, id DESC LIMIT ?", (limit,)
             ).fetchall()
         return [
             {
@@ -73,3 +81,41 @@ class CommandHistory:
             }
             for event_id, timestamp, command, source, points, outcome in rows
         ]
+
+    def save_sequence(
+        self, event_ids: list[int], points: list[dict[str, float]]
+    ) -> dict[str, Any]:
+        timestamp = datetime.now(timezone.utc).isoformat()
+        with closing(self._connect()) as db, db:
+            cursor = db.execute(
+                "INSERT INTO command_sequences (timestamp, event_ids, points) VALUES (?, ?, ?)",
+                (timestamp, json.dumps(event_ids), json.dumps(points)),
+            )
+            assert cursor.lastrowid is not None
+            return {
+                "id": cursor.lastrowid, "timestamp": timestamp,
+                "event_ids": event_ids, "points": points,
+            }
+
+    @staticmethod
+    def _sequence_from_row(row: tuple[Any, ...]) -> dict[str, Any]:
+        sequence_id, timestamp, event_ids, points = row
+        return {
+            "id": sequence_id, "timestamp": timestamp,
+            "event_ids": json.loads(event_ids), "points": json.loads(points),
+        }
+
+    def read_sequence(self, sequence_id: int) -> dict[str, Any] | None:
+        with closing(self._connect()) as db:
+            row = db.execute(
+                "SELECT id, timestamp, event_ids, points FROM command_sequences WHERE id = ?",
+                (sequence_id,),
+            ).fetchone()
+        return self._sequence_from_row(row) if row is not None else None
+
+    def read_sequences(self) -> list[dict[str, Any]]:
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                "SELECT id, timestamp, event_ids, points FROM command_sequences ORDER BY id DESC"
+            ).fetchall()
+        return [self._sequence_from_row(row) for row in rows]

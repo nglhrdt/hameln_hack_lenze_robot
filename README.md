@@ -84,15 +84,41 @@ both text and directional commands. Leave it empty for continuous movement
 unless the text specifies a distance; zero does not start a jog. Stop remains
 available even if the field is invalid.
 
-The Befehlsverlauf card shows the latest 100 commands dispatched through the
-API, newest first, including failed and in-progress attempts. It refreshes
-every two seconds. Each entry retains its source (including the original text
-or point percentages), the dispatched command, and, for point commands, the
+The Befehlsverlauf card loads the latest 10 API commands on connection, then
+receives new commands and outcome updates over the status WebSocket. It retains
+up to 100 entries while connected, newest first; reconnecting reloads the latest
+10. The card scrolls when it contains more than 10 entries. Entries include
+failed and in-progress attempts. Each retains its source (including the original text
+or normalized points), the dispatched command, and, for point commands, the
 mapped device coordinates in `GET /command-history`. A successful movement
 entry means the start request completed, not that the robot moved or
 subsequently reached its destination.
 Commands rejected before dispatch and direct Python or command-line calls are
 not recorded. An interrupted server may leave an entry marked in progress.
+
+Point-command entries can be selected in the history, including failed or
+in-progress attempts. Once the selection contains at least two points, use
+**Sequenz speichern** in the card header. Each entry contributes all its points
+in their original order; entries are combined in the order selected. The
+sequence stores copies of the original normalized coordinates, not OPC device
+coordinates, and does not execute the robot. Saved sequences survive history
+eviction and server restarts. Selections removed from the visible history must
+be selected again; an entry evicted before saving is reported as unavailable.
+
+The **Sequenzen** card lists saved sequences and their points. **Ausführen**
+sends the saved points through the same validated point-command path as
+`POST /command` and moves the robot. The execution appears in command history
+with its sequence ID. The card loads on startup and refreshes after saving;
+use **Aktualisieren** to load sequences saved by other clients. If an execution
+response fails, check the robot status before retrying: the robot may already
+have received the command. The existing stop control remains available.
+
+`POST /sequences` accepts `{"event_ids":[2,1]}` in selection order and returns
+the saved sequence with its ID, timestamp, source event IDs and points.
+`GET /sequences` lists saved sequences, newest first. Protect both endpoints as
+well as the history endpoints: they are unauthenticated.
+`POST /sequences/{id}/execute` executes the saved sequence and is also
+unauthenticated.
 
 History is stored in `data/command_history.sqlite3`; set
 `COMMAND_HISTORY_DB_PATH` to choose another file. Newly created history files
@@ -123,6 +149,11 @@ are not authenticated, so protect access to the API.
 The page connects to `/ws/status` on the same host. The server samples X and Z
 positions approximately once per second per connected client and sends JSON
 such as `{"command":"move_left","position":{"x":123.4,"z":56.7},"error":null}`.
+Clients opting in with `/ws/status?history=1` also receive
+`{"type":"history_snapshot","events":[...]}` followed by
+`{"type":"history_event","event":{...}}` for new entries and outcome changes.
+The snapshot is resent on reconnect; a `history_error` message reports a failed
+snapshot read. Clients without the query parameter receive only status messages.
 The command is `null` when no command is running; an in-progress home, stop, or point
 takes precedence over movement. Failed position reads are logged and sent as
 `"position":null` with an error message. The UI clears stale status on

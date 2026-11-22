@@ -1,11 +1,13 @@
 import asyncio
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -341,6 +343,143 @@ class CommandHistoryTests(unittest.TestCase):
             self.assertEqual(self.client.get("/command-history").status_code, 500)
 
 
+class SequenceTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.path = Path(directory.name) / "history.sqlite3"
+        self.store = CommandHistory(self.path)
+        history = patch("input_to_cmd.api.command_history", self.store)
+        history.start()
+        self.addCleanup(history.stop)
+        self.client = TestClient(app, raise_server_exceptions=False)
+        self.addCleanup(self.client.close)
+
+    def add_point_event(self, points):
+        return self.store.start("point", {"inputType": "point", "points": points}, None)
+
+    def test_saves_selection_order_and_survives_history_eviction_and_restart(self):
+        first = self.add_point_event([{"x": 0.1, "z": 0.2}])
+        second = self.add_point_event([{"x": 0.3, "z": 0.4}, {"x": 1, "z": 0}])
+        self.store.finish(second, "failed")
+        response = self.client.post("/sequences", json={"event_ids": [second, first]})
+        self.assertEqual(response.status_code, 201)
+        sequence = response.json()
+        self.assertEqual(sequence["event_ids"], [second, first])
+        self.assertEqual(sequence["points"], [
+            {"x": 0.3, "z": 0.4}, {"x": 1.0, "z": 0.0}, {"x": 0.1, "z": 0.2},
+        ])
+        for _ in range(100):
+            self.store.start("stop", {"inputType": "instantCommand", "data": "stop"}, None)
+        self.assertNotIn(first, [event["id"] for event in self.store.read()])
+        self.assertEqual(self.client.get("/sequences").json(), [sequence])
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+        result = subprocess.run(
+            [sys.executable, "-c",
+             "import json,sys; from pathlib import Path; "
+             "from input_to_cmd.command_history import CommandHistory; "
+             "print(json.dumps(CommandHistory(Path(sys.argv[1])).read_sequences()))", str(self.path)],
+            env=env, check=True, capture_output=True, text=True,
+        )
+        self.assertEqual(json.loads(result.stdout), [sequence])
+
+    def test_single_entry_with_multiple_points_can_be_saved(self):
+        event_id = self.add_point_event([{"x": 0, "z": 0}, {"x": 1, "z": 1}])
+        first = self.client.post(
+            "/sequences", json={"event_ids": [event_id]},
+        )
+        second = self.client.post("/sequences", json={"event_ids": [event_id]})
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(
+            [sequence["id"] for sequence in self.client.get("/sequences").json()],
+            [second.json()["id"], first.json()["id"]],
+        )
+
+    def test_rejects_invalid_or_unavailable_selections(self):
+        point = self.add_point_event([{"x": 0, "z": 0}])
+        nonpoint = self.store.start("home", {"inputType": "instantCommand", "data": "home"}, None)
+        for ids, status in (
+            ([], 422), ([point], 422), ([point, point], 422),
+            ([nonpoint], 422), ([999999], 409), (["1"], 422),
+        ):
+            with self.subTest(ids=ids):
+                self.assertEqual(self.client.post("/sequences", json={"event_ids": ids}).status_code, status)
+        self.assertEqual(self.client.get("/sequences").json(), [])
+
+    def test_storage_failure_is_reported(self):
+        point = self.add_point_event([{"x": 0, "z": 0}, {"x": 1, "z": 1}])
+        with patch.object(self.store, "save_sequence", side_effect=OSError("disk unavailable")):
+            with self.assertLogs("input_to_cmd", level="ERROR"):
+                self.assertEqual(
+                    self.client.post("/sequences", json={"event_ids": [point]}).status_code, 500
+                )
+        self.assertEqual(self.client.get("/sequences").json(), [])
+
+    @patch("input_to_cmd.command_dispatcher.write_xz_points", new_callable=AsyncMock)
+    def test_execution_maps_saved_points_and_records_sequence_source(self, write_points):
+        points = [{"x": 0, "z": 0}, {"x": 0.5, "z": 0.25}, {"x": 1, "z": 1}]
+        sequence = self.store.save_sequence([1, 2], points)
+        response = self.client.post(f"/sequences/{sequence['id']}/execute")
+        self.assertEqual(response.status_code, 200)
+        write_points.assert_awaited_once_with([(16.0, 155.0), (167.5, 114.25), (319.0, -8.0)])
+        event = self.store.read()[0]
+        self.assertEqual(event["command"], "point")
+        self.assertEqual(event["outcome"], "succeeded")
+        self.assertEqual(event["source"], {
+            "inputType": "point", "points": points, "sequence_id": sequence["id"],
+        })
+        self.assertEqual(
+            self.client.post("/sequences", json={"event_ids": [event["id"]]}).status_code, 201
+        )
+
+    @patch("input_to_cmd.command_dispatcher.write_xz_points", new_callable=AsyncMock)
+    def test_failed_execution_is_recorded(self, write_points):
+        sequence = self.store.save_sequence(
+            [1], [{"x": 0, "z": 0}, {"x": 1, "z": 1}]
+        )
+        write_points.side_effect = ConnectionError("OPC unavailable")
+        response = self.client.post(f"/sequences/{sequence['id']}/execute")
+        self.assertEqual(response.status_code, 500)
+        event = self.store.read()[0]
+        self.assertEqual(event["outcome"], "failed")
+        self.assertEqual(event["source"]["sequence_id"], sequence["id"])
+
+    @patch("input_to_cmd.command_dispatcher.write_xz_points", new_callable=AsyncMock)
+    def test_missing_or_invalid_sequence_is_not_executed(self, write_points):
+        self.assertEqual(self.client.post("/sequences/999999/execute").status_code, 404)
+        sequence = self.store.save_sequence([1], [{"x": 0, "z": 0}, {"x": 1, "z": 1}])
+        for points in ([{"x": 0, "z": 0}], [{"x": -0.1, "z": 0}, {"x": 1, "z": 1}]):
+            with self.subTest(points=points):
+                with closing(sqlite3.connect(self.path)) as db, db:
+                    db.execute("UPDATE command_sequences SET points = ? WHERE id = ?",
+                               (json.dumps(points), sequence["id"]))
+                with self.assertLogs("input_to_cmd", level="ERROR"):
+                    self.assertEqual(
+                        self.client.post(f"/sequences/{sequence['id']}/execute").status_code, 500
+                    )
+        write_points.assert_not_awaited()
+        self.assertEqual(self.store.read(), [])
+
+    @patch("input_to_cmd.command_dispatcher.write_xz_points", new_callable=AsyncMock)
+    def test_sequence_read_failure_is_reported_without_execution(self, write_points):
+        with patch.object(self.store, "read_sequence", side_effect=OSError("disk unavailable")):
+            with self.assertLogs("input_to_cmd", level="ERROR"):
+                self.assertEqual(self.client.post("/sequences/1/execute").status_code, 500)
+        write_points.assert_not_awaited()
+
+    @patch("input_to_cmd.command_dispatcher.write_xz_points", new_callable=AsyncMock)
+    def test_history_failure_does_not_prevent_sequence_execution(self, write_points):
+        sequence = self.store.save_sequence([1], [{"x": 0, "z": 0}, {"x": 1, "z": 1}])
+        with patch.object(self.store, "start", side_effect=OSError("disk unavailable")):
+            with self.assertLogs("input_to_cmd", level="ERROR"):
+                response = self.client.post(f"/sequences/{sequence['id']}/execute")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("history_warning", response.json())
+        write_points.assert_awaited_once()
+
+
 class CommandHistoryConcurrencyTests(unittest.IsolatedAsyncioTestCase):
     async def test_in_progress_command_is_visible_then_updated(self):
         started = asyncio.Event()
@@ -403,6 +542,14 @@ class CommandHistoryConcurrencyTests(unittest.IsolatedAsyncioTestCase):
 
 class StepSizeCommandTests(unittest.TestCase):
     def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        history = patch(
+            "input_to_cmd.api.command_history",
+            CommandHistory(Path(directory.name) / "history.sqlite3"),
+        )
+        history.start()
+        self.addCleanup(history.stop)
         settings = patch.multiple(
             "input_to_cmd.api",
             AI_API_URL="https://ki.mwl.merona.de/v1",
@@ -606,6 +753,119 @@ class DispatcherTests(unittest.IsolatedAsyncioTestCase):
 
 
 class StatusSocketTests(unittest.TestCase):
+    @staticmethod
+    def receive_history(socket, message_type):
+        for _ in range(100):
+            message = socket.receive_json()
+            if message.get("type") == message_type:
+                return message
+        raise AssertionError(f"Did not receive {message_type}")
+
+    @patch("input_to_cmd.api.STATUS_POLL_INTERVAL_SECONDS", 0.01)
+    @patch("input_to_cmd.api.get_position", new_callable=AsyncMock, return_value=(20.0, 30.0))
+    @patch("input_to_cmd.api.execute_command", new_callable=AsyncMock)
+    def test_history_snapshot_and_updates_are_pushed_to_each_socket(self, execute, position):
+        with tempfile.TemporaryDirectory() as directory:
+            store = CommandHistory(Path(directory) / "history.sqlite3")
+            for index in range(12):
+                event_id = store.start("home", {"inputType": "text", "data": str(index)}, None)
+                store.finish(event_id, "succeeded")
+            with patch("input_to_cmd.api.command_history", store):
+                with TestClient(app) as client:
+                    with client.websocket_connect("/ws/status?history=1") as first, \
+                         client.websocket_connect("/ws/status?history=1") as second:
+                        for socket in (first, second):
+                            snapshot = self.receive_history(socket, "history_snapshot")["events"]
+                            self.assertEqual(len(snapshot), 10)
+                            self.assertEqual(snapshot[0]["source"]["data"], "11")
+                            self.assertEqual(snapshot[-1]["source"]["data"], "2")
+                        response = client.post("/command", json={
+                            "inputType": "instantCommand", "data": "stop",
+                        })
+                        self.assertEqual(response.status_code, 200)
+                        for socket in (first, second):
+                            pending = self.receive_history(socket, "history_event")["event"]
+                            completed = self.receive_history(socket, "history_event")["event"]
+                            self.assertEqual(pending["command"], "stop")
+                            self.assertEqual(pending["outcome"], "pending")
+                            self.assertEqual(completed["id"], pending["id"])
+                            self.assertEqual(completed["outcome"], "succeeded")
+                    with client.websocket_connect("/ws/status?history=1") as reconnected:
+                        snapshot = self.receive_history(reconnected, "history_snapshot")["events"]
+                        self.assertEqual(len(snapshot), 10)
+                        self.assertEqual(snapshot[0]["command"], "stop")
+                        self.assertEqual(snapshot[0]["outcome"], "succeeded")
+
+    @patch("input_to_cmd.api.STATUS_POLL_INTERVAL_SECONDS", 0.01)
+    @patch("input_to_cmd.api.get_position", new_callable=AsyncMock, return_value=(20.0, 30.0))
+    @patch("input_to_cmd.api.execute_command", new_callable=AsyncMock)
+    def test_command_during_snapshot_is_not_missed(self, execute, position):
+        entered = threading.Event()
+        release = threading.Event()
+        with tempfile.TemporaryDirectory() as directory:
+            store = CommandHistory(Path(directory) / "history.sqlite3")
+            read = store.read
+
+            def blocked_read(limit=100):
+                entered.set()
+                if not release.wait(5):
+                    raise OSError("snapshot timed out")
+                return read(limit)
+
+            with patch.object(store, "read", side_effect=blocked_read), \
+                 patch("input_to_cmd.api.command_history", store):
+                with TestClient(app) as client:
+                    with client.websocket_connect("/ws/status?history=1") as socket:
+                        try:
+                            self.assertTrue(entered.wait(2))
+                            self.assertEqual(client.post("/command", json={
+                                "inputType": "instantCommand", "data": "stop",
+                            }).status_code, 200)
+                        finally:
+                            release.set()
+                        snapshot = self.receive_history(socket, "history_snapshot")["events"]
+                        pending = self.receive_history(socket, "history_event")["event"]
+                        completed = self.receive_history(socket, "history_event")["event"]
+                        self.assertEqual(snapshot[0]["id"], pending["id"])
+                        self.assertEqual(snapshot[0]["outcome"], "succeeded")
+                        self.assertEqual(pending["outcome"], "pending")
+                        self.assertEqual(completed["outcome"], "succeeded")
+
+    @patch("input_to_cmd.api.STATUS_POLL_INTERVAL_SECONDS", 0.01)
+    @patch("input_to_cmd.api.get_position", new_callable=AsyncMock, return_value=(20.0, 30.0))
+    @patch("input_to_cmd.api.execute_command", new_callable=AsyncMock)
+    def test_failed_command_is_pushed(self, execute, position):
+        execute.side_effect = ConnectionError("OPC unavailable")
+        with tempfile.TemporaryDirectory() as directory:
+            store = CommandHistory(Path(directory) / "history.sqlite3")
+            with patch("input_to_cmd.api.command_history", store):
+                with TestClient(app, raise_server_exceptions=False) as client:
+                    with client.websocket_connect("/ws/status?history=1") as socket:
+                        self.receive_history(socket, "history_snapshot")
+                        response = client.post("/command", json={
+                            "inputType": "instantCommand", "data": "stop",
+                        })
+                        self.assertEqual(response.status_code, 500)
+                        self.assertEqual(
+                            self.receive_history(socket, "history_event")["event"]["outcome"], "pending"
+                        )
+                        self.assertEqual(
+                            self.receive_history(socket, "history_event")["event"]["outcome"], "failed"
+                        )
+
+    @patch("input_to_cmd.api.STATUS_POLL_INTERVAL_SECONDS", 0.01)
+    @patch("input_to_cmd.api.get_position", new_callable=AsyncMock, return_value=(20.0, 30.0))
+    def test_history_snapshot_read_failure_is_reported(self, position):
+        with patch("input_to_cmd.api.command_history") as store:
+            store.read.side_effect = OSError("history unavailable")
+            with self.assertLogs("input_to_cmd", level="ERROR"):
+                with TestClient(app) as client:
+                    with client.websocket_connect("/ws/status?history=1") as socket:
+                        self.assertEqual(
+                            self.receive_history(socket, "history_error")["error"],
+                            "History unavailable",
+                        )
+
     @patch("input_to_cmd.api.STATUS_POLL_INTERVAL_SECONDS", 0.01)
     @patch("input_to_cmd.api.get_running_command", side_effect=["move_left", None])
     @patch("input_to_cmd.api.get_position", new_callable=AsyncMock)

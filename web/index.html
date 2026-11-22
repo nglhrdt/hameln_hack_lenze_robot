@@ -51,6 +51,12 @@
         #configuration-retry[hidden] {
             display: none !important;
         }
+        #save-sequence[hidden] {
+            display: none !important;
+        }
+        #command-history {
+            overflow-y: auto;
+        }
         .settings-dialog {
             width: min(90vw, 480px);
             border: 0;
@@ -147,13 +153,28 @@
     </div>
 
     <div class="card">
-        <div class="card-header bg-primary text-white">
+        <div class="card-header bg-primary text-white d-flex flex-wrap justify-content-between align-items-center gap-2">
             <h5 class="card-title mb-0">Befehlsverlauf</h5>
+            <button type="button" class="btn btn-light btn-sm" id="save-sequence" hidden>Sequenz speichern</button>
         </div>
         <div class="card-body">
             <p class="small text-danger" id="history-warning" role="alert"></p>
             <p class="small" id="history-status" role="status">Verlauf wird geladen...</p>
-            <ol class="list-group list-group-numbered" id="command-history"></ol>
+            <p class="small" id="sequence-status" role="status"></p>
+            <ol class="list-group list-group-numbered" id="command-history" tabindex="0" aria-label="Befehlsverlauf"></ol>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header bg-primary text-white d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <h5 class="card-title mb-0">Sequenzen</h5>
+            <button type="button" class="btn btn-light btn-sm" id="sequences-refresh">Aktualisieren</button>
+        </div>
+        <div class="card-body">
+            <p class="small">Ausführen bewegt den Roboter.</p>
+            <p class="small" id="sequences-status" role="status">Sequenzen werden geladen...</p>
+            <p class="small" id="sequence-execution-status" role="status"></p>
+            <ul class="list-group" id="sequences-list"></ul>
         </div>
     </div>
 
@@ -246,47 +267,242 @@
             const textSpinner = document.getElementById("text-command-spinner");
             const historyList = document.getElementById("command-history");
             const historyStatus = document.getElementById("history-status");
+            const saveSequence = document.getElementById("save-sequence");
+            const sequenceStatus = document.getElementById("sequence-status");
+            const sequencesList = document.getElementById("sequences-list");
+            const sequencesStatus = document.getElementById("sequences-status");
+            const sequencesRefresh = document.getElementById("sequences-refresh");
+            const executionStatus = document.getElementById("sequence-execution-status");
+            const selectedEvents = new Set();
+            let history = new Map();
+            let historyLoaded = false;
+            let savingSequence = false;
+            let sequenceLoadVersion = 0;
+            let executingSequence = false;
 
-            async function refreshHistory() {
+            async function executeSequence(id) {
+                if (executingSequence) {
+                    return;
+                }
+                executingSequence = true;
+                sequencesList.querySelectorAll("button").forEach(button => button.disabled = true);
+                executionStatus.classList.remove("text-danger");
+                executionStatus.textContent = `Sequenz ${id} wird ausgeführt...`;
                 try {
-                    const response = await fetch("/command-history");
+                    const response = await fetch(`/sequences/${id}/execute`, {method: "POST"});
                     if (!response.ok) {
                         throw new Error(`HTTP ${response.status}`);
                     }
-                    const events = await response.json();
-                    const items = events.map(event => {
-                        const item = document.createElement("li");
-                        item.className = "list-group-item";
-                        const heading = document.createElement("strong");
-                        heading.textContent = `${event.command} — ${{
-                            pending: "in Bearbeitung", succeeded: "ausgeführt",
-                            failed: "fehlgeschlagen", interrupted: "unterbrochen",
-                        }[event.outcome] || event.outcome}`;
-                        const details = document.createElement("div");
-                        details.className = "small text-break";
-                        const date = new Date(event.timestamp);
-                        const source = event.source.inputType === "text"
-                            ? `Text: ${event.source.data}`
-                            : event.source.inputType === "instantCommand"
-                                ? "Direktbefehl"
-                                : `Punkte: ${JSON.stringify(event.source.points)}`;
-                        details.textContent = `${date.toLocaleString()} | ${source}`;
-                        item.append(heading, details);
-                        return item;
-                    });
-                    historyList.replaceChildren(...items);
-                    historyStatus.classList.remove("text-danger");
-                    historyStatus.textContent = events.length ? "" : "Noch keine Befehle.";
+                    const result = await response.json();
+                    if (result.history_warning) {
+                        document.getElementById("history-warning").textContent =
+                            "Befehl gesendet, aber der Verlauf konnte nicht gespeichert werden.";
+                    }
+                    executionStatus.textContent = `Sequenz ${id} ausgeführt.`;
                 } catch (error) {
-                    console.error("Could not load command history", error);
-                    historyStatus.classList.add("text-danger");
-                    historyStatus.textContent = `Verlauf konnte nicht geladen werden: ${error.message}`;
+                    console.error("Could not execute sequence", error);
+                    executionStatus.classList.add("text-danger");
+                    executionStatus.textContent = `Ausführung von Sequenz ${id} nicht bestätigt: ${error.message}. Roboterstatus prüfen.`;
                 } finally {
-                    setTimeout(refreshHistory, 2000);
+                    executingSequence = false;
+                    sequencesList.querySelectorAll("button").forEach(button => button.disabled = false);
                 }
             }
 
-            refreshHistory();
+            async function loadSequences() {
+                const version = ++sequenceLoadVersion;
+                sequencesRefresh.disabled = true;
+                sequencesStatus.classList.remove("text-danger");
+                sequencesStatus.textContent = "Sequenzen werden geladen...";
+                try {
+                    const response = await fetch("/sequences");
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    const sequences = await response.json();
+                    if (version !== sequenceLoadVersion) {
+                        return;
+                    }
+                    const items = sequences.map(sequence => {
+                        const item = document.createElement("li");
+                        item.className = "list-group-item";
+                        const heading = document.createElement("strong");
+                        heading.textContent = `Sequenz ${sequence.id}`;
+                        const timestamp = document.createElement("div");
+                        timestamp.className = "small";
+                        timestamp.textContent = new Date(sequence.timestamp).toLocaleString();
+                        const details = document.createElement("details");
+                        const summary = document.createElement("summary");
+                        summary.textContent = `${sequence.points.length} Punkte anzeigen`;
+                        const points = document.createElement("div");
+                        points.className = "small text-break";
+                        points.textContent = JSON.stringify(sequence.points);
+                        details.append(summary, points);
+                        const button = document.createElement("button");
+                        button.type = "button";
+                        button.className = "btn btn-primary btn-sm mt-2";
+                        button.textContent = "Ausführen";
+                        button.setAttribute("aria-label", `Sequenz ${sequence.id} ausführen`);
+                        button.disabled = executingSequence;
+                        button.addEventListener("click", () => executeSequence(sequence.id));
+                        item.append(heading, timestamp, details, button);
+                        return item;
+                    });
+                    sequencesList.replaceChildren(...items);
+                    sequencesStatus.textContent = sequences.length ? "" : "Noch keine Sequenzen.";
+                } catch (error) {
+                    if (version !== sequenceLoadVersion) {
+                        return;
+                    }
+                    console.error("Could not load sequences", error);
+                    sequencesStatus.classList.add("text-danger");
+                    sequencesStatus.textContent = `Sequenzen konnten nicht geladen werden: ${error.message}`;
+                } finally {
+                    if (version === sequenceLoadVersion) {
+                        sequencesRefresh.disabled = false;
+                    }
+                }
+            }
+
+            sequencesRefresh.addEventListener("click", loadSequences);
+            loadSequences();
+
+            function updateSelection() {
+                let pointCount = 0;
+                let order = 0;
+                const selectionOrder = new Map();
+                selectedEvents.forEach(id => {
+                    pointCount += history.get(id).source.points.length;
+                    selectionOrder.set(id, ++order);
+                });
+                historyList.querySelectorAll("[data-history-id]").forEach(input => {
+                    const id = Number(input.dataset.historyId);
+                    input.checked = selectedEvents.has(id);
+                    input.disabled = savingSequence;
+                    input.nextElementSibling.textContent = selectionOrder.has(id)
+                        ? `Auswahl ${selectionOrder.get(id)}` : "Auswählen";
+                });
+                saveSequence.hidden = pointCount < 2;
+                saveSequence.disabled = savingSequence;
+            }
+
+            saveSequence.addEventListener("click", async function() {
+                if (savingSequence) {
+                    return;
+                }
+                savingSequence = true;
+                sequenceStatus.classList.remove("text-danger");
+                sequenceStatus.textContent = "Sequenz wird gespeichert...";
+                updateSelection();
+                try {
+                    const response = await fetch("/sequences", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({event_ids: [...selectedEvents]}),
+                    });
+                    if (!response.ok) {
+                        throw new Error(response.status === 409
+                            ? "Ein ausgewählter Verlaufseintrag ist nicht mehr verfügbar."
+                            : `HTTP ${response.status}`);
+                    }
+                    const sequence = await response.json();
+                    selectedEvents.clear();
+                    sequenceStatus.textContent = `Sequenz ${sequence.id} gespeichert.`;
+                    loadSequences();
+                } catch (error) {
+                    console.error("Could not save sequence", error);
+                    sequenceStatus.classList.add("text-danger");
+                    sequenceStatus.textContent = `Sequenz konnte nicht gespeichert werden: ${error.message}`;
+                } finally {
+                    savingSequence = false;
+                    updateSelection();
+                }
+            });
+
+            function updateHistoryHeight() {
+                if (historyList.children.length <= 10) {
+                    historyList.style.maxHeight = "";
+                    return;
+                }
+                const tenth = historyList.children[9].getBoundingClientRect();
+                const list = historyList.getBoundingClientRect();
+                historyList.style.maxHeight = `${tenth.bottom - list.top + historyList.scrollTop}px`;
+            }
+
+            const historyResizeObserver = new ResizeObserver(updateHistoryHeight);
+
+            function renderHistory() {
+                const scrollTop = historyList.scrollTop;
+                const events = [...history.values()]
+                    .sort((a, b) => b.timestamp.localeCompare(a.timestamp) || b.id - a.id)
+                    .slice(0, 100);
+                history = new Map(events.map(event => [event.id, event]));
+                let removedSelection = false;
+                selectedEvents.forEach(id => {
+                    if (!history.has(id)) {
+                        selectedEvents.delete(id);
+                        removedSelection = true;
+                    }
+                });
+                if (removedSelection) {
+                    sequenceStatus.classList.add("text-danger");
+                    sequenceStatus.textContent = "Ein ausgewählter Verlaufseintrag ist nicht mehr sichtbar.";
+                }
+                const items = events.map(event => {
+                    const item = document.createElement("li");
+                    item.className = "list-group-item";
+                    const heading = document.createElement("strong");
+                    heading.textContent = `${event.command} — ${{
+                        pending: "in Bearbeitung", succeeded: "ausgeführt",
+                        failed: "fehlgeschlagen", interrupted: "unterbrochen",
+                    }[event.outcome] || event.outcome}`;
+                    const details = document.createElement("div");
+                    details.className = "small text-break";
+                    const date = new Date(event.timestamp);
+                    const source = event.source.inputType === "text"
+                        ? `Text: ${event.source.data}`
+                        : event.source.inputType === "instantCommand"
+                            ? "Direktbefehl"
+                            : `${event.source.sequence_id ? `Sequenz ${event.source.sequence_id} | ` : ""}Punkte: ${JSON.stringify(event.source.points)}`;
+                    details.textContent = `${date.toLocaleString()} | ${source}`;
+                    if (event.source.inputType === "point" &&
+                        Array.isArray(event.source.points) && event.source.points.length) {
+                        const label = document.createElement("label");
+                        label.className = "d-block small";
+                        const input = document.createElement("input");
+                        input.type = "checkbox";
+                        input.className = "form-check-input me-1";
+                        input.dataset.historyId = event.id;
+                        input.setAttribute("aria-label", `Punktbefehl ${event.id} auswählen`);
+                        const text = document.createElement("span");
+                        input.addEventListener("change", function() {
+                            if (input.checked) {
+                                selectedEvents.add(event.id);
+                            } else {
+                                selectedEvents.delete(event.id);
+                            }
+                            sequenceStatus.classList.remove("text-danger");
+                            sequenceStatus.textContent = "";
+                            updateSelection();
+                        });
+                        label.append(input, text);
+                        item.append(heading, details, label);
+                    } else {
+                        item.append(heading, details);
+                    }
+                    return item;
+                });
+                historyResizeObserver.disconnect();
+                historyList.replaceChildren(...items);
+                updateHistoryHeight();
+                items.slice(0, 10).forEach(item => historyResizeObserver.observe(item));
+                historyList.scrollTop = scrollTop;
+                updateSelection();
+                if (historyLoaded) {
+                    historyStatus.classList.remove("text-danger");
+                    historyStatus.textContent = events.length ? "" : "Noch keine Befehle.";
+                }
+            }
 
             textInput.addEventListener("keydown", function(e) {
                 if (e.key === "Enter" && e.ctrlKey && !e.altKey && !e.metaKey &&
@@ -545,10 +761,12 @@
             function connectStatus() {
                 if (!["http:", "https:"].includes(window.location.protocol)) {
                     clearStatus("Status nur über den Webserver verfügbar.");
+                    historyStatus.classList.add("text-danger");
+                    historyStatus.textContent = "Verlauf nur über den Webserver verfügbar.";
                     return;
                 }
                 const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-                const socket = new WebSocket(`${protocol}//${window.location.host}/ws/status`);
+                const socket = new WebSocket(`${protocol}//${window.location.host}/ws/status?history=1`);
 
                 socket.addEventListener("message", function(event) {
                     let state;
@@ -557,6 +775,27 @@
                     } catch (error) {
                         console.error("Invalid status message", error);
                         clearStatus("Ungültige Statusmeldung.");
+                        return;
+                    }
+                    if (state.type === "history_snapshot") {
+                        history = new Map(state.events.map(entry => [entry.id, entry]));
+                        historyLoaded = true;
+                        renderHistory();
+                        return;
+                    }
+                    if (state.type === "history_event") {
+                        const previous = history.get(state.event.id);
+                        if (previous && previous.outcome !== "pending" && state.event.outcome === "pending") {
+                            return;
+                        }
+                        history.set(state.event.id, state.event);
+                        renderHistory();
+                        return;
+                    }
+                    if (state.type === "history_error") {
+                        historyLoaded = false;
+                        historyStatus.classList.add("text-danger");
+                        historyStatus.textContent = "Verlauf konnte nicht geladen werden.";
                         return;
                     }
                     buttons.forEach(button => {
@@ -576,6 +815,9 @@
                 });
                 socket.addEventListener("close", function() {
                     clearStatus("Statusverbindung getrennt. Erneuter Verbindungsversuch...");
+                    historyLoaded = false;
+                    historyStatus.classList.add("text-danger");
+                    historyStatus.textContent = "Verlauf getrennt. Erneuter Verbindungsversuch...";
                     setTimeout(connectStatus, 2000);
                 });
             }
