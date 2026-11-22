@@ -75,6 +75,25 @@ other clients.
 The text-command card sends its input to `/command` for AI interpretation;
 use the send button or Ctrl+Enter.
 
+The Befehlsverlauf card shows the latest 100 commands dispatched through the
+API, newest first, including failed and in-progress attempts. It refreshes
+every two seconds. Each entry retains its source (including the original text
+or point percentages), the dispatched command, and, for point commands, the
+mapped device coordinates in `GET /command-history`. A successful movement
+entry means the start request completed, not that the robot moved or
+subsequently reached its destination.
+Commands rejected before dispatch and direct Python or command-line calls are
+not recorded. An interrupted server may leave an entry marked in progress.
+
+History is stored in `data/command_history.sqlite3`; set
+`COMMAND_HISTORY_DB_PATH` to choose another file. Newly created history files
+are owner-readable and writable only; check permissions on existing files and
+protect this file, its backups,
+and access to `GET /command-history`: original text may contain sensitive
+information and the API has no authentication. Storage failures are logged and
+reported in the successful command response as `history_warning`; they do not
+prevent a robot command, including stop, from being dispatched.
+
 The selected device type and Geräteansicht URL are shared settings. Change
 the URL using the card's dialog; only HTTP and HTTPS URLs without embedded
 credentials are accepted. Settings are loaded when the page opens, so other

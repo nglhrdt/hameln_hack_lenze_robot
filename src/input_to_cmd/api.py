@@ -2,7 +2,9 @@ import asyncio
 import logging
 import math
 import os
+import sqlite3
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -18,6 +20,7 @@ from pydantic import BaseModel, Field, StrictStr, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from .command_dispatcher import UnsupportedCommandError, execute_command, get_running_command
+from .command_history import CommandHistory
 from .config_store import Configuration, ConfigurationStore, ConfigurationUpdate
 from .opc_client import X_MAX, X_MIN, Z_MAX, Z_MIN, get_position, shutdown_connection
 
@@ -73,6 +76,9 @@ app.mount("/web", StaticFiles(directory=web_dir, html=True), name="web")
 configuration_store = ConfigurationStore(
     Path(os.getenv("CONFIG_DB_PATH", str(web_dir.parent / "data" / "config.json")))
 )
+command_history = CommandHistory(
+    Path(os.getenv("COMMAND_HISTORY_DB_PATH", str(web_dir.parent / "data" / "command_history.sqlite3")))
+)
 
 logger = logging.getLogger("input_to_cmd")
 logger.setLevel(LOG_LEVEL)
@@ -127,6 +133,15 @@ def update_configuration(changes: ConfigurationUpdate) -> Configuration:
     except (OSError, ValueError):
         logger.exception("Could not save configuration")
         raise HTTPException(status_code=500, detail="Could not save configuration.") from None
+
+
+@app.get("/command-history")
+def read_command_history() -> list[dict]:
+    try:
+        return command_history.read()
+    except (OSError, sqlite3.Error, ValueError):
+        logger.exception("Could not read command history")
+        raise HTTPException(status_code=500, detail="Could not read command history.") from None
 
 
 def extract_command(content: CommandInput) -> str:
@@ -222,15 +237,50 @@ async def command(content: CommandInput) -> dict[str, str]:
     
     logger.debug("Extracted command: %s", extracted)
     print(extracted, flush=True)
+    source = content.model_dump(mode="json", exclude_none=True)
+    started_at = datetime.now(timezone.utc)
+    task = asyncio.create_task(
+        execute_command(extracted) if points is None else execute_command(extracted, points)
+    )
+    event_id = None
+    history_failed = False
+    outcome = "interrupted"
     try:
-        if points is None:
-            await execute_command(extracted)
+        try:
+            event_id = await run_in_threadpool(
+                command_history.start, extracted, source, points, started_at
+            )
+        except (OSError, sqlite3.Error):
+            logger.exception("Could not save command history")
+            history_failed = True
+        try:
+            await task
+        except UnsupportedCommandError as exc:
+            outcome = "failed"
+            logger.warning("Unsupported command: %s", extracted)
+            raise HTTPException(status_code=501, detail=str(exc)) from exc
+        except Exception:
+            outcome = "failed"
+            raise
         else:
-            await execute_command(extracted, points)
-    except UnsupportedCommandError as exc:
-        logger.warning("Unsupported command: %s", extracted)
-        raise HTTPException(status_code=501, detail=str(exc)) from exc
+            outcome = "succeeded"
+    finally:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        if event_id is not None:
+            try:
+                await run_in_threadpool(command_history.finish, event_id, outcome)
+            except (OSError, sqlite3.Error):
+                logger.exception("Could not update command history")
+                history_failed = True
 
     logger.debug("Command execution finished: %s", extracted)
 
-    return {"result": "command exectued"}
+    result = {"result": "command exectued"}
+    if history_failed:
+        result["history_warning"] = "Could not save command history."
+    return result

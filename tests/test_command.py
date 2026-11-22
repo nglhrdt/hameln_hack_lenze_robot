@@ -4,7 +4,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,12 +15,21 @@ from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
 from input_to_cmd.api import EXTRACTION_INSTRUCTIONS, app
+from input_to_cmd.command_history import CommandHistory
 from input_to_cmd.command_dispatcher import UnsupportedCommandError, execute_command
 from input_to_cmd import command_dispatcher, opc_client
 
 
 class CommandTests(unittest.TestCase):
     def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        history = patch(
+            "input_to_cmd.api.command_history",
+            CommandHistory(Path(directory.name) / "history.sqlite3"),
+        )
+        history.start()
+        self.addCleanup(history.stop)
         settings = patch.multiple(
             "input_to_cmd.api",
             AI_API_URL="https://ki.mwl.merona.de/v1",
@@ -218,6 +229,165 @@ class CommandTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 500)
         write_points.assert_awaited_once()
+
+
+class CommandHistoryTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.path = Path(directory.name) / "nested" / "history.sqlite3"
+        self.store = CommandHistory(self.path)
+        history = patch("input_to_cmd.api.command_history", self.store)
+        history.start()
+        self.addCleanup(history.stop)
+        self.client = TestClient(app, raise_server_exceptions=False)
+        self.addCleanup(self.client.close)
+
+    @patch("input_to_cmd.api.extract_command", return_value="home")
+    @patch("input_to_cmd.command_dispatcher.set_home", new_callable=AsyncMock)
+    @patch("input_to_cmd.command_dispatcher.stop", new_callable=AsyncMock)
+    @patch("input_to_cmd.command_dispatcher.write_xz_points", new_callable=AsyncMock)
+    def test_records_sources_outcomes_and_mapped_points(self, write_points, stop, home, extract):
+        self.assertEqual(self.client.get("/command-history").json(), [])
+        self.assertEqual(self.client.post("/command", json={
+            "inputType": "text", "data": "Bitte nach Hause",
+        }).status_code, 200)
+        stop.side_effect = ConnectionError("OPC failed")
+        self.assertEqual(self.client.post("/command", json={
+            "inputType": "instantCommand", "data": "stop",
+        }).status_code, 500)
+        self.assertEqual(self.client.post("/command", json={
+            "inputType": "point", "points": [{"x": 50, "z": 50}],
+        }).status_code, 200)
+        self.assertEqual(self.client.post("/command", json={
+            "inputType": "instantCommand", "data": "invalid",
+        }).status_code, 422)
+
+        events = CommandHistory(self.path).read()
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual([event["command"] for event in events], ["point", "stop", "home"])
+        self.assertEqual([event["outcome"] for event in events], ["succeeded", "failed", "succeeded"])
+        self.assertEqual(events[0]["source"], {
+            "inputType": "point", "points": [{"x": 50.0, "z": 50.0}],
+        })
+        self.assertEqual(events[0]["points"], [[167.5, 73.5]])
+        self.assertEqual(events[1]["source"], {"inputType": "instantCommand", "data": "stop"})
+        self.assertEqual(events[2]["source"], {"inputType": "text", "data": "Bitte nach Hause"})
+        self.assertEqual(self.client.get("/command-history").json(), events)
+
+    def test_keeps_latest_100_and_does_not_restore_evicted_pending_events(self):
+        first = self.store.start("home", {"inputType": "instantCommand", "data": "home"}, None)
+        for i in range(100):
+            self.store.start("stop", {"inputType": "text", "data": str(i)}, None)
+        self.store.finish(first, "succeeded")
+        events = CommandHistory(self.path).read()
+        self.assertEqual(len(events), 100)
+        self.assertEqual(events[0]["source"]["data"], "99")
+        self.assertEqual(events[-1]["source"]["data"], "0")
+
+    def test_orders_by_dispatch_time_and_persists_across_processes(self):
+        now = datetime.now(timezone.utc)
+        source = {"inputType": "instantCommand", "data": "stop"}
+        self.store.start("stop", source, None, now)
+        self.store.start("home", source, None, now - timedelta(seconds=1))
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+        result = subprocess.run(
+            [sys.executable, "-c",
+             "import json,sys; from pathlib import Path; "
+             "from input_to_cmd.command_history import CommandHistory; "
+             "print(json.dumps(CommandHistory(Path(sys.argv[1])).read()))", str(self.path)],
+            env=env, check=True, capture_output=True, text=True,
+        )
+        self.assertEqual([event["command"] for event in json.loads(result.stdout)], ["stop", "home"])
+
+    @patch("input_to_cmd.command_dispatcher.stop", new_callable=AsyncMock)
+    def test_storage_failure_is_reported_without_blocking_stop(self, stop):
+        with patch.object(self.store, "start", side_effect=OSError("disk unavailable")):
+            with self.assertLogs("input_to_cmd", level="ERROR"):
+                response = self.client.post("/command", json={
+                    "inputType": "instantCommand", "data": "stop",
+                })
+        stop.assert_awaited_once()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("history_warning", response.json())
+
+    @patch("input_to_cmd.command_dispatcher.stop", new_callable=AsyncMock)
+    def test_update_failure_is_reported(self, stop):
+        with patch.object(self.store, "finish", side_effect=OSError("disk unavailable")):
+            with self.assertLogs("input_to_cmd", level="ERROR"):
+                response = self.client.post("/command", json={
+                    "inputType": "instantCommand", "data": "stop",
+                })
+        stop.assert_awaited_once()
+        self.assertIn("history_warning", response.json())
+        self.assertEqual(self.store.read()[0]["outcome"], "pending")
+
+    def test_read_failure_returns_error(self):
+        self.path.parent.mkdir(parents=True)
+        self.path.write_text("invalid database", encoding="utf-8")
+        with self.assertLogs("input_to_cmd", level="ERROR"):
+            self.assertEqual(self.client.get("/command-history").status_code, 500)
+
+
+class CommandHistoryConcurrencyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_in_progress_command_is_visible_then_updated(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def home():
+            started.set()
+            await release.wait()
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = CommandHistory(Path(directory) / "history.sqlite3")
+            with patch("input_to_cmd.api.command_history", store), \
+                 patch("input_to_cmd.command_dispatcher.set_home", side_effect=home):
+                async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                    request = asyncio.create_task(client.post(
+                        "/command", json={"inputType": "instantCommand", "data": "home"},
+                    ))
+                    try:
+                        await asyncio.wait_for(started.wait(), 2)
+                        for _ in range(100):
+                            events = (await client.get("/command-history")).json()
+                            if events:
+                                break
+                            await asyncio.sleep(0.01)
+                        self.assertEqual(events[0]["outcome"], "pending")
+                    finally:
+                        release.set()
+                    self.assertEqual((await request).status_code, 200)
+                    self.assertEqual((await client.get("/command-history")).json()[0]["outcome"], "succeeded")
+
+    async def test_stop_dispatches_while_history_storage_is_blocked(self):
+        entered = threading.Event()
+        release = threading.Event()
+        dispatched = asyncio.Event()
+
+        def blocked_start(*args):
+            entered.set()
+            if not release.wait(5):
+                raise OSError("history storage timed out")
+            return 1
+
+        async def stop():
+            dispatched.set()
+
+        with patch("input_to_cmd.api.command_history") as store, \
+             patch("input_to_cmd.command_dispatcher.stop", side_effect=stop):
+            store.start.side_effect = blocked_start
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                request = asyncio.create_task(client.post(
+                    "/command", json={"inputType": "instantCommand", "data": "stop"},
+                ))
+                try:
+                    self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+                    await asyncio.wait_for(dispatched.wait(), 2)
+                    self.assertFalse(request.done())
+                finally:
+                    release.set()
+                self.assertEqual((await request).status_code, 200)
 
 
 class DispatcherTests(unittest.IsolatedAsyncioTestCase):
@@ -819,6 +989,14 @@ class OpcClientTests(unittest.IsolatedAsyncioTestCase):
     @patch("input_to_cmd.opc_client.create_client")
     @patch("input_to_cmd.api.OpenAI")
     async def test_api_move_monitor_survives_response_and_stop_cancels_it(self, mock_openai, create_client):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        history = patch(
+            "input_to_cmd.api.command_history",
+            CommandHistory(Path(directory.name) / "history.sqlite3"),
+        )
+        history.start()
+        self.addCleanup(history.stop)
         nodes = {node: MagicMock() for node in (
             opc_client.X_JOG_NEG_NODE_ID, opc_client.X_JOG_POS_NODE_ID,
             opc_client.Z_JOG_NEG_NODE_ID, opc_client.Z_JOG_POS_NODE_ID,
@@ -931,6 +1109,7 @@ print(json.dumps([allowed.status_code, allowed.headers.get("access-control-allow
                   success.headers.get("access-control-allow-origin")]))
 """
         with tempfile.TemporaryDirectory() as directory:
+            env["COMMAND_HISTORY_DB_PATH"] = str(Path(directory) / "history.sqlite3")
             result = subprocess.run(
                 [sys.executable, "-c", script], cwd=directory, env=env,
                 check=True, capture_output=True, text=True,

@@ -148,6 +148,17 @@
 
     <div class="card">
         <div class="card-header bg-primary text-white">
+            <h5 class="card-title mb-0">Befehlsverlauf</h5>
+        </div>
+        <div class="card-body">
+            <p class="small text-danger" id="history-warning" role="alert"></p>
+            <p class="small" id="history-status" role="status">Verlauf wird geladen...</p>
+            <ol class="list-group list-group-numbered" id="command-history"></ol>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header bg-primary text-white">
             <h5 class="card-title mb-0">Textbefehl</h5>
         </div>
         <div class="card-body">
@@ -217,6 +228,10 @@
                 }
                 
                 const result = await response.json();
+                if (result.history_warning) {
+                    document.getElementById("history-warning").textContent =
+                        "Befehl gesendet, aber der Verlauf konnte nicht gespeichert werden.";
+                }
                 console.log(`Command executed: ${command}`, result);
             } catch (error) {
                 console.error(`Error executing command: ${error}`);
@@ -229,6 +244,49 @@
             const textStatus = document.getElementById("text-command-status");
             const textSubmit = textForm.querySelector('button[type="submit"]');
             const textSpinner = document.getElementById("text-command-spinner");
+            const historyList = document.getElementById("command-history");
+            const historyStatus = document.getElementById("history-status");
+
+            async function refreshHistory() {
+                try {
+                    const response = await fetch("/command-history");
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    const events = await response.json();
+                    const items = events.map(event => {
+                        const item = document.createElement("li");
+                        item.className = "list-group-item";
+                        const heading = document.createElement("strong");
+                        heading.textContent = `${event.command} — ${{
+                            pending: "in Bearbeitung", succeeded: "ausgeführt",
+                            failed: "fehlgeschlagen", interrupted: "unterbrochen",
+                        }[event.outcome] || event.outcome}`;
+                        const details = document.createElement("div");
+                        details.className = "small text-break";
+                        const date = new Date(event.timestamp);
+                        const source = event.source.inputType === "text"
+                            ? `Text: ${event.source.data}`
+                            : event.source.inputType === "instantCommand"
+                                ? "Direktbefehl"
+                                : `Punkte: ${JSON.stringify(event.source.points)}`;
+                        details.textContent = `${date.toLocaleString()} | ${source}`;
+                        item.append(heading, details);
+                        return item;
+                    });
+                    historyList.replaceChildren(...items);
+                    historyStatus.classList.remove("text-danger");
+                    historyStatus.textContent = events.length ? "" : "Noch keine Befehle.";
+                } catch (error) {
+                    console.error("Could not load command history", error);
+                    historyStatus.classList.add("text-danger");
+                    historyStatus.textContent = `Verlauf konnte nicht geladen werden: ${error.message}`;
+                } finally {
+                    setTimeout(refreshHistory, 2000);
+                }
+            }
+
+            refreshHistory();
 
             textInput.addEventListener("keydown", function(e) {
                 if (e.key === "Enter" && e.ctrlKey && !e.altKey && !e.metaKey &&
@@ -265,6 +323,11 @@
                     });
                     if (!response.ok) {
                         throw new Error(`HTTP ${response.status}`);
+                    }
+                    const result = await response.json();
+                    if (result.history_warning) {
+                        document.getElementById("history-warning").textContent =
+                            "Befehl gesendet, aber der Verlauf konnte nicht gespeichert werden.";
                     }
                     if (textInput.value === text) {
                         textInput.value = "";
