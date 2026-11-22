@@ -191,11 +191,11 @@ class CommandTests(unittest.TestCase):
 
     @patch("input_to_cmd.api.OpenAI")
     @patch("input_to_cmd.command_dispatcher.write_xz_points", new_callable=AsyncMock)
-    def test_point_input_maps_percentages_and_dispatches(self, write_points, mock_openai):
+    def test_point_input_maps_normalized_values_and_dispatches(self, write_points, mock_openai):
         response = self.client.post(
             "/command",
             json={"inputType": "point", "points": [
-                {"x": 0, "z": 100}, {"x": 50, "z": 50}, {"x": 100, "z": 0},
+                {"x": 0.0, "z": 1.0}, {"x": 0.5, "z": 0.5}, {"x": 1.0, "z": 0.0},
             ]},
         )
 
@@ -207,10 +207,11 @@ class CommandTests(unittest.TestCase):
     @patch("input_to_cmd.command_dispatcher.write_xz_points", new_callable=AsyncMock)
     def test_invalid_points_are_rejected(self, write_points, mock_openai):
         for points in (
-            None, [], [{"x": -1, "z": 50}], [{"x": 50, "z": 101}],
-            [{"x": True, "z": 50}], [{"x": "50", "z": 50}],
-            [{"x": 50}], [{"z": 50}], [[50, 50]],
-            [{"x": float("nan"), "z": 50}], [{"x": 50, "z": float("inf")}],
+            None, [], [{"x": -0.1, "z": 0.5}], [{"x": 0.5, "z": 1.1}],
+            [{"x": True, "z": 0.5}], [{"x": "0.5", "z": 0.5}],
+            [{"x": 0.5}], [{"z": 0.5}], [[0.5, 0.5]],
+            [{"x": float("nan"), "z": 0.5}], [{"x": 0.5, "z": float("inf")}],
+            [{"x": 50.0, "z": 0.5}],
         ):
             with self.subTest(points=points):
                 response = self.client.post(
@@ -225,7 +226,7 @@ class CommandTests(unittest.TestCase):
     def test_point_write_failure_is_not_reported_as_success(self, write_points):
         write_points.side_effect = ConnectionError("OPC failed")
         response = self.client.post(
-            "/command", json={"inputType": "point", "points": [{"x": 50, "z": 50}]}
+            "/command", json={"inputType": "point", "points": [{"x": 0.5, "z": 0.5}]}
         )
         self.assertEqual(response.status_code, 500)
         write_points.assert_awaited_once()

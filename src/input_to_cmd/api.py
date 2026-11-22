@@ -94,7 +94,7 @@ EXTRACTION_INSTRUCTIONS = (
 )
 
 
-Percentage = Annotated[float, Field(strict=True, ge=0, le=100, allow_inf_nan=False)]
+Percentage = Annotated[float, Field(strict=True, ge=0, le=1, allow_inf_nan=False)]
 
 
 class PointInput(BaseModel):
@@ -219,8 +219,8 @@ async def command(content: CommandInput) -> dict[str, str]:
         assert content.points is not None
         points = [
             (
-                X_MIN + point.x * (X_MAX - X_MIN) / 100,
-                Z_MIN + point.z * (Z_MAX - Z_MIN) / 100,
+                X_MIN + point.x * (X_MAX - X_MIN),
+                Z_MIN + point.z * (Z_MAX - Z_MIN),
             )
             for point in content.points
         ]
